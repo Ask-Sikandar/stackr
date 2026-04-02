@@ -47,11 +47,11 @@ services:
     ports:
       - "11434:11434"
     # Uncomment to enable GPU (requires nvidia-container-toolkit)
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - capabilities: [gpu]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
 
   # ---------------------------------------------------------------------------
   # Django backend (Daphne ASGI)
