@@ -5,6 +5,11 @@ build/
 dist/
 wheels/
 *.egg-info
-
+*/node_modules/
 # Virtual environments
 .venv
+
+.env
+frontend/.next/
+frontend/next-env.d.ts
+frontend/package-lock.json

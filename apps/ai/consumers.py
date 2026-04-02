@@ -15,12 +15,14 @@ Message protocol (all JSON):
 Streaming flow:
 1. Receive user message
 2. Send typing indicator
-3. Classify intent + retrieve context (fast — no LLM)
-4. Stream Ollama tokens via agent.stream_message(), forwarding each over WS
-5. After last token, build and send the final structured AgentResponse
-6. Persist both message turns and update lead score in DB (async via sync_to_async)
+3. Run agent.stream_message() in a thread-pool executor (it's a sync generator)
+4. Each token and the final AgentResponse are communicated back to the async
+   consumer via asyncio.Queue — the queue is the bridge between the thread
+   and the event loop.
+5. Persist turns and update lead score synchronously in the executor thread.
 """
 
+import asyncio
 import json
 
 from asgiref.sync import sync_to_async
@@ -28,9 +30,8 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from django.db import transaction
 
 from apps.leads.models import IntentEvent, Lead
-from services.agent import AgentResponse
+from services.agent import AgentHandler, AgentResponse
 from services.factory import get_agent
-from services.interfaces.intent_classifier import Intent
 
 from .models import Conversation, Message, MessageRole
 
@@ -61,47 +62,70 @@ class ChatConsumer(AsyncWebsocketConsumer):
         await self._handle_chat(user_message)
 
     # ------------------------------------------------------------------
-    # Core chat handler
+    # Core streaming handler
     # ------------------------------------------------------------------
 
     async def _handle_chat(self, user_message: str) -> None:
-        # 1. Typing indicator
         await self._send_json({"type": "typing", "status": True})
 
-        try:
-            agent = await sync_to_async(get_agent)()
-            full_content = ""
-            final_response: AgentResponse | None = None
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue()
 
-            # 2. Stream tokens from LLM
-            async def _stream():
-                nonlocal full_content, final_response
-                # stream_message is a sync generator — wrap it
-                gen = await sync_to_async(agent.stream_message)(user_message)
-                # Iterate synchronously inside a thread
-                for item in gen:
+        # Run the sync streaming generator in a thread pool.
+        # Tokens and the final AgentResponse are pushed into the queue
+        # so the async consumer can forward them without blocking the event loop.
+        def _run_stream() -> None:
+            try:
+                agent: AgentHandler = get_agent()
+                for item in agent.stream_message(user_message):
                     if isinstance(item, AgentResponse):
-                        final_response = item
+                        asyncio.run_coroutine_threadsafe(
+                            queue.put(("response", item)), loop
+                        ).result()
                     else:
-                        full_content += item
-                        await self.channel_layer.send(
-                            self.channel_name,
-                            {"type": "send_token", "token": item},
-                        )
+                        asyncio.run_coroutine_threadsafe(
+                            queue.put(("token", item)), loop
+                        ).result()
+            except Exception as exc:
+                asyncio.run_coroutine_threadsafe(
+                    queue.put(("error", str(exc))), loop
+                ).result()
+            finally:
+                asyncio.run_coroutine_threadsafe(
+                    queue.put(("done", None)), loop
+                ).result()
 
-            await sync_to_async(_stream_sync)(agent, user_message, self)
+        # Start the thread; don't await yet — drain the queue concurrently
+        executor_future = loop.run_in_executor(None, _run_stream)
 
-        except Exception as exc:
-            await self._send_json({"type": "typing", "status": False})
-            await self._send_error(f"Assistant error: {exc}")
-            return
+        final_response: AgentResponse | None = None
 
-        # 3. Persist & score
+        try:
+            while True:
+                msg_type, data = await queue.get()
+
+                if msg_type == "token":
+                    await self._send_json({"type": "stream", "token": data})
+
+                elif msg_type == "response":
+                    final_response = data
+
+                elif msg_type == "error":
+                    await self._send_error(f"Assistant error: {data}")
+                    break
+
+                elif msg_type == "done":
+                    break
+
+        finally:
+            await asyncio.wrap_future(executor_future)  # ensure thread is clean
+
+        await self._send_json({"type": "typing", "status": False})
+
         if final_response:
             lead = await sync_to_async(_persist_and_score)(
                 self.lead_id, user_message, final_response
             )
-            # 4. Send final structured message
             await self._send_json(
                 {
                     "type": "message",
@@ -110,14 +134,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 }
             )
 
-        await self._send_json({"type": "typing", "status": False})
-
     # ------------------------------------------------------------------
-    # WebSocket send helpers
+    # Helpers
     # ------------------------------------------------------------------
-
-    async def send_token(self, event: dict) -> None:
-        await self._send_json({"type": "stream", "token": event["token"]})
 
     async def _send_json(self, data: dict) -> None:
         await self.send(text_data=json.dumps(data))
@@ -127,33 +146,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
 
 # ---------------------------------------------------------------------------
-# Sync helpers (run in thread via sync_to_async)
+# DB persistence — runs in thread via sync_to_async
 # ---------------------------------------------------------------------------
-
-def _stream_sync(agent, user_message: str, consumer: "ChatConsumer") -> tuple[str, AgentResponse | None]:
-    """
-    Iterates the sync generator from agent.stream_message().
-    Sends each token via the consumer's channel layer synchronously.
-    Returns (full_content, final_response).
-    """
-    import asyncio
-
-    loop = asyncio.get_event_loop()
-    full_content = ""
-    final_response = None
-
-    for item in agent.stream_message(user_message):
-        if isinstance(item, AgentResponse):
-            final_response = item
-        else:
-            full_content += item
-            # Schedule a coroutine send on the event loop
-            asyncio.run_coroutine_threadsafe(
-                consumer._send_json({"type": "stream", "token": item}), loop
-            )
-
-    return full_content, final_response
-
 
 @transaction.atomic
 def _persist_and_score(lead_id: str, user_message: str, response: AgentResponse) -> Lead:

@@ -126,6 +126,13 @@ export function ChatWidget({ leadId, apiUrl: _apiUrl, wsUrl }: ChatWidgetProps) 
     onError: () => setError("Connection error — retrying..."),
   });
 
+  // Clear the error banner as soon as the connection is established.
+  // Needed because React Strict Mode double-invokes effects, causing the
+  // first WS to close with an error before the second one connects cleanly.
+  useEffect(() => {
+    if (isConnected) setError(null);
+  }, [isConnected]);
+
   const handleSend = useCallback(() => {
     const text = input.trim();
     if (!text || !isConnected) return;
