@@ -29,22 +29,25 @@ All AI services implement abstract interfaces (`IEmbedder`, `IRetriever`, etc.) 
 docker-compose up --build
 
 # 2. The backend auto-runs migrations on startup.
-# 3. Ingest sample documents (one-time):
+# 3. Ingestion worker runs as a separate container (Celery).
+# 4. Ingest sample documents (one-time):
 docker-compose exec backend uv run python manage.py shell -c "
 from pathlib import Path
 from apps.documents.models import Document
-from services.ingestion import ingest_document
+from apps.documents.tasks import run_ingestion_job
+from apps.documents.models import IngestionJob
 
 docs_dir = Path('sample_docs')
 for f in docs_dir.glob('*.md'):
     doc = Document.objects.create(title=f.stem.replace('_', ' ').title(), content=f.read_text(), source_type='markdown')
-    ingest_document(doc.id)
-    print(f'Ingested {doc.title} ({doc.chunks.count()} chunks)')
+    job = IngestionJob.objects.create(document=doc)
+    run_ingestion_job.delay(str(job.job_id))
+    print(f'Queued ingestion for {doc.title} ({job.job_id})')
 "
 
-# 4. Open http://localhost:3000 — chat widget ready
-# 5. Admin panel: http://localhost:3000/admin/documents
-# 6. Lead dashboard: http://localhost:3000/admin/leads
+# 5. Open http://localhost:3000 — chat widget ready
+# 6. Admin panel: http://localhost:3000/admin/documents
+# 7. Lead dashboard: http://localhost:3000/admin/leads
 ```
 
 > **Note:** Ollama pulls `llama3.2:3b` (~2GB) on first start. This takes a few minutes.
@@ -105,7 +108,9 @@ uv run python eval/eval_quality.py --mock
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET/POST | `/api/documents/` | List / upload documents |
-| POST | `/api/documents/<id>/ingest/` | Trigger chunking + embedding |
+| POST | `/api/documents/ingestion/warm/` | Queue ingestion worker warm-up |
+| POST | `/api/documents/<id>/ingest/` | Queue ingestion job (returns 202) |
+| GET | `/api/documents/ingest-jobs/<job_id>/` | Ingestion job status |
 | GET | `/api/documents/<id>/chunks/` | List chunks |
 | POST | `/api/ai/chat/` | Single-turn chat (REST) |
 | GET | `/api/ai/chat/history/<lead_id>/` | Conversation history |
@@ -138,3 +143,4 @@ See [DECISIONS.md](DECISIONS.md) for full reasoning.
 - **Keyword intent classification** — sub-ms, fully testable, accurate for 4 categories
 - **SOLID service layer** — ABCs + `SERVICE_CLASSES` registry; tests inject mocks
 - **Lead scoring dashboard** — added beyond spec: conversion=25pts, pricing=10pts
+

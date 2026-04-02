@@ -12,7 +12,8 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 WORKDIR /app
 
 # Copy dependency files first for layer caching
-COPY pyproject.toml .
+# README.md must accompany pyproject.toml — hatchling reads it at build time
+COPY pyproject.toml README.md ./
 RUN uv sync --no-dev --frozen 2>/dev/null || uv sync --no-dev
 
 # Copy project

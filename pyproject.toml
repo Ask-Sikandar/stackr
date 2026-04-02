@@ -11,6 +11,7 @@ dependencies = [
     "django-cors-headers>=4.6",
     "channels[daphne]>=4.2",
     "channels-redis>=4.2",
+    "celery>=5.4",
     # Database
     "psycopg[binary]>=3.2",
     "pgvector>=0.3",

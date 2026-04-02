@@ -1,11 +1,19 @@
 from django.db import models
 from pgvector.django import VectorField
+import uuid
 
 
 class SourceType(models.TextChoices):
     MARKDOWN = "markdown", "Markdown"
     PDF = "pdf", "PDF"
     TEXT = "text", "Text"
+
+
+class IngestionStatus(models.TextChoices):
+    QUEUED = "queued", "Queued"
+    RUNNING = "running", "Running"
+    SUCCEEDED = "succeeded", "Succeeded"
+    FAILED = "failed", "Failed"
 
 
 class Document(models.Model):
@@ -54,3 +62,29 @@ class Chunk(models.Model):
 
     def __str__(self) -> str:
         return f"{self.document.title} — chunk {self.chunk_index}"
+
+
+class IngestionJob(models.Model):
+    """
+    Tracks asynchronous ingestion requests for documents.
+    """
+
+    job_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False, db_index=True)
+    document = models.ForeignKey(Document, related_name="ingestion_jobs", on_delete=models.CASCADE)
+    status = models.CharField(max_length=20, choices=IngestionStatus.choices, default=IngestionStatus.QUEUED)
+    task_id = models.CharField(max_length=255, blank=True, default="")
+    retries = models.PositiveSmallIntegerField(default=0)
+    error_message = models.TextField(blank=True, default="")
+    queued_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-queued_at"]
+        indexes = [
+            models.Index(fields=["status"]),
+            models.Index(fields=["document", "status"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.document.title} — {self.status} ({self.job_id})"

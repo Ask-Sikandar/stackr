@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import Chunk, Document
+from .models import Chunk, Document, IngestionJob
 
 
 class ChunkSerializer(serializers.ModelSerializer):
@@ -42,3 +42,21 @@ class DocumentListSerializer(serializers.ModelSerializer):
 
     def get_chunk_count(self, obj: Document) -> int:
         return obj.chunks.count()
+
+
+class IngestionJobSerializer(serializers.ModelSerializer):
+    document_id = serializers.IntegerField(source="document.id", read_only=True)
+
+    class Meta:
+        model = IngestionJob
+        fields = [
+            "job_id",
+            "document_id",
+            "status",
+            "task_id",
+            "retries",
+            "error_message",
+            "queued_at",
+            "started_at",
+            "finished_at",
+        ]

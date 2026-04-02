@@ -168,3 +168,17 @@ EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 # Chunking defaults
 CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "500"))
 CHUNK_OVERLAP = int(os.environ.get("CHUNK_OVERLAP", "50"))
+
+# ---------------------------------------------------------------------------
+# Async ingestion (Celery)
+# ---------------------------------------------------------------------------
+
+CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")
+CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", CELERY_BROKER_URL)
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = int(os.environ.get("CELERY_TASK_TIME_LIMIT", "1800"))
+CELERY_TASK_SOFT_TIME_LIMIT = int(os.environ.get("CELERY_TASK_SOFT_TIME_LIMIT", "1500"))
+
+INGESTION_TASK_MAX_RETRIES = int(os.environ.get("INGESTION_TASK_MAX_RETRIES", "3"))
+INGESTION_TASK_RETRY_DELAY_SECONDS = int(os.environ.get("INGESTION_TASK_RETRY_DELAY_SECONDS", "30"))
+INGESTION_WARM_ON_UPLOAD = os.environ.get("INGESTION_WARM_ON_UPLOAD", "true").lower() == "true"
