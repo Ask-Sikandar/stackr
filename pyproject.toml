@@ -1,0 +1,52 @@
+[project]
+name = "asses-proj"
+version = "0.1.0"
+description = "Memox AI Sales Assistant — shipping container company POC"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    # Django core
+    "django>=5.2",
+    "djangorestframework>=3.15",
+    "django-cors-headers>=4.6",
+    "channels[daphne]>=4.2",
+    "channels-redis>=4.2",
+    # Database
+    "psycopg[binary]>=3.2",
+    "pgvector>=0.3",
+    # AI / ML
+    "sentence-transformers>=3.4",
+    "httpx>=0.28",
+    # Utilities
+    "python-dotenv>=1.0",
+    "pydantic>=2.10",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-django>=4.9",
+    "pytest-asyncio>=0.25",
+    "pytest-httpx>=0.35",
+    "factory-boy>=3.3",
+    "coverage>=7.6",
+]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings.test"
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+addopts = "-v --tb=short"
+
+[tool.coverage.run]
+source = ["."]
+omit = ["*/migrations/*", "*/tests/*", "frontend/*", "eval/*"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
