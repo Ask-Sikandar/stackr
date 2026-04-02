@@ -1,0 +1,124 @@
+# DECISIONS.md — Memox AI Sales Assistant
+
+Key architectural decisions, trade-offs, AI-assisted choices, and where I overrode the AI.
+
+---
+
+## 1. Embedding Model: all-MiniLM-L6-v2
+
+**Chosen:** `sentence-transformers/all-MiniLM-L6-v2` (384 dims, local)
+
+**Rejected:** OpenAI `text-embedding-3-small`, TF-IDF
+
+**Why:** Runs fully offline — no API key, no per-request cost, no external dependency. At 384 dimensions it's fast enough for a demo (< 100ms per query on CPU). Benchmark scores (~63% on SBERT STS) are adequate for domain-specific FAQ retrieval where vocabulary overlap is high.
+
+**AI helped with:** Suggesting the model name. I verified the benchmark vs. the larger `all-mpnet-base-v2` (768 dims) and confirmed the speed/quality trade-off favours MiniLM for this demo scale.
+
+**Where I'd change it in production:** Switch to `text-embedding-3-small` (OpenAI) or `voyage-3` for better cross-lingual and semantic recall on longer documents.
+
+---
+
+## 2. Vector Store: pgvector over ChromaDB
+
+**Chosen:** pgvector (PostgreSQL extension via `pgvector` Python library)
+
+**Rejected:** ChromaDB, FAISS, Qdrant
+
+**Why:** Django already requires PostgreSQL. Adding pgvector is one `CREATE EXTENSION` SQL statement — no extra Docker service, no extra connection pool, no data synchronisation between two stores. Chunk records and their embeddings live in the same ACID transaction (no partial-failure risk). SQL filters + vector similarity in one query (`WHERE document_id = X ORDER BY embedding <=> query_vec`).
+
+**AI helped with:** Initial suggestion to use ChromaDB (simpler). I overrode this — ChromaDB is a second database service with no benefit at POC scale, and pgvector is production-grade to millions of vectors.
+
+---
+
+## 3. Chunking Strategy: Paragraph-first, not fixed-size
+
+**Chosen:** Paragraph-aware chunking (split on `\n\n`, then sentence boundaries, tables atomic)
+
+**Rejected:** Fixed 500-char splits, sliding window, sentence-only
+
+**Why:** Container spec documents are table-heavy and section-structured. A fixed character split cuts mid-table-row ("40ft | $3,85" on one chunk, "0" on the next), which destroys meaning for both retrieval and the LLM. Splitting by paragraph boundaries first preserves semantic units — each paragraph is a coherent thought. Tables are kept as a single atomic chunk so pricing comparisons stay intact.
+
+**Chunk size rationale:** 500 chars ≈ 80–100 tokens, fits well within the MiniLM model's 256-token window while providing enough context per chunk.
+
+**Where I overrode AI:** Claude suggested a simpler fixed-size splitter with overlap. I rewrote the chunker with table and list detection after manually inspecting what fixed splits produced on the pricing_sheet.md document.
+
+---
+
+## 4. LLM: Ollama llama3.2:3b (local)
+
+**Chosen:** Ollama with `llama3.2:3b` for local inference
+
+**Rejected:** OpenAI GPT-4o-mini, Claude claude-haiku-4-5 API
+
+**Why:** No API key required, fully offline, fits in 4GB RAM. For a POC demo this is the right trade-off. The 3B model is sufficient for extractive Q&A from retrieved context — it doesn't need to reason deeply, just paraphrase and cite.
+
+**In production I'd use:** GPT-4o-mini or Claude claude-haiku-4-5 for better instruction following and more reliable source citation.
+
+---
+
+## 5. Intent Classification: Keyword matching over LLM zero-shot
+
+**Chosen:** Keyword pattern matching with priority ordering (conversion checked first)
+
+**Rejected:** LLM zero-shot classification, fine-tuned classifier, embedding-based classification
+
+**Why:** For 4 well-defined sales categories, keyword matching is sub-millisecond and fully testable without any model. LLM zero-shot would add 1–2s latency before every response. The categories have clear vocabulary boundaries: "how much / price / cost" → pricing, "deliver / ship / Texas" → availability, "I want to buy / place an order" → conversion.
+
+**Limitation I documented:** "Is the 40ft available in Texas?" would classify as availability (correct) but misses a pricing sub-question. A multi-label classifier would handle this. I noted this as a "what I'd do with more time" item.
+
+**Where I overrode AI:** Claude suggested an LLM-based classifier. I changed it to keyword matching and documented the reasoning — speed and testability matter more than marginal accuracy gains for 4 categories.
+
+---
+
+## 6. WebSocket Streaming
+
+**Chosen:** Ollama streaming API (`stream: true`) forwarded token-by-token over Django Channels WebSocket
+
+**Rejected:** REST polling, Server-Sent Events, batch response
+
+**Why:** Users perceive LLM responses as ~3× faster with streaming even when total latency is identical. The spec required WebSocket for the typing indicator anyway — streaming tokens adds no additional infrastructure. Ollama's streaming API returns NDJSON that we iterate line-by-line.
+
+**Implementation challenge:** Django Channels consumers are async but `agent.stream_message()` is a sync generator (because `httpx.stream()` is sync). I use `sync_to_async` + `asyncio.run_coroutine_threadsafe` to bridge the gap. This is slightly complex but keeps the service layer sync (easier to test).
+
+---
+
+## 7. Lead Scoring: Weighted Intent Events
+
+**Chosen:** Additive score: general=1, availability=5, pricing=10, conversion=25
+
+**Rejected:** Equal weights, ML-based propensity score, time-decayed score
+
+**Why:** This wasn't in the spec — I added it as the "obviously better" feature. A real sales assistant needs to know who's hot. The weights reflect sales reality: someone who asks about pricing is 10× more valuable than someone who asks a general question. Someone who says "I want to order" is worth 25× a general query. The weights are transparent and adjustable.
+
+**AI helped with:** Suggesting equal weights (1:1:1:1). I changed the weights after thinking about conversion funnels.
+
+---
+
+## 8. SOLID Architecture
+
+The service layer uses abstract base classes (`IEmbedder`, `IRetriever`, `ILLMClient`, `IChunker`, `IIntentClassifier`) registered in `settings.SERVICE_CLASSES`. The factory resolves concrete classes at runtime via `import_string`.
+
+This means:
+- Tests inject mocks by changing `SERVICE_CLASSES` in `settings/test.py` — no model loading, no HTTP calls
+- Swapping from Ollama to OpenAI is one settings change, no code change
+- The `AgentHandler` depends on interfaces, not concrete classes — fully testable in isolation
+
+**AI helped with:** The general pattern. I added the `reset_cache()` function after discovering that `@lru_cache` singletons persisted between test cases and caused mock/real class bleed-through.
+
+---
+
+## 9. What I Added That Wasn't Asked For
+
+- **Lead Intelligence Dashboard** (`/admin/leads`) — shows lead scores, intent timelines, and message counts. Sales teams need to know who to call next. This is "obviously better" without being asked.
+- **Inline quote request form** (CTACard) — when a prospect says "I want to buy", the chat widget renders an inline form to capture name + email. No page redirect, no friction.
+- **Answer quality eval script** (`eval/eval_quality.py`) — 10 golden Q&A pairs, semantic similarity scoring, intent accuracy. Tests answer quality, not just HTTP 200.
+
+---
+
+## 10. What I'd Do With More Time
+
+- **Re-ranking:** Add a cross-encoder (e.g., `cross-encoder/ms-marco-MiniLM-L-6-v2`) on top of vector retrieval to improve chunk selection quality.
+- **Async ingestion:** Move `ingest_document()` into a Celery task so large document uploads don't block the HTTP request.
+- **Lead authentication:** Currently `lead_id` is a UUID passed from the client — trivially spoofable. Production needs a proper session + HMAC verification.
+- **HyDE (Hypothetical Document Embeddings):** Generate a hypothetical answer, embed it, then retrieve — often outperforms query embedding for complex questions.
+- **Webhook on conversion:** Fire a webhook to a CRM (HubSpot, Salesforce) when `handoff_triggered=True` so the sales team gets a real-time notification.
