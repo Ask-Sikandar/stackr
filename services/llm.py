@@ -18,6 +18,7 @@ import httpx
 from django.conf import settings
 
 from .interfaces.llm_client import ILLMClient
+from .metering import record_usage_event
 
 
 class OllamaLLMClient(ILLMClient):
@@ -145,22 +146,73 @@ class FallbackLLMClient(ILLMClient):
     Tries configured providers in order until one succeeds.
     """
 
-    def __init__(self, clients: list[tuple[str, ILLMClient]]) -> None:
+    def __init__(
+        self,
+        clients: list[tuple[str, ILLMClient]],
+        organization_id: int | None = None,
+        project_id: int | None = None,
+    ) -> None:
         if not clients:
             raise ValueError("At least one LLM client is required for fallback routing.")
         self._clients = clients
+        self._organization_id = organization_id
+        self._project_id = project_id
+
+    def _emit_event(self, event_type: str, metadata: dict | None = None) -> None:
+        if self._organization_id is None:
+            return
+        record_usage_event(
+            event_type=event_type,
+            organization_id=self._organization_id,
+            project_id=self._project_id,
+            quantity=1,
+            metadata=metadata or {},
+        )
 
     def complete(self, prompt: str) -> str:
         errors: list[str] = []
+        failed_labels: list[str] = []
         for label, client in self._clients:
             try:
-                return client.complete(prompt)
+                content = client.complete(prompt)
+                self._emit_event(
+                    "llm.provider_used",
+                    {"provider": label, "mode": "complete"},
+                )
+                if failed_labels:
+                    self._emit_event(
+                        "llm.fallback_used",
+                        {
+                            "mode": "complete",
+                            "selected_provider": label,
+                            "failed_providers": failed_labels,
+                        },
+                    )
+                return content
             except Exception as exc:  # pragma: no cover - provider-specific failures
+                failed_labels.append(label)
+                self._emit_event(
+                    "llm.provider_failed",
+                    {
+                        "provider": label,
+                        "mode": "complete",
+                        "error_type": type(exc).__name__,
+                    },
+                )
                 errors.append(f"{label}: {exc}")
+
+        self._emit_event(
+            "llm.all_failed",
+            {
+                "mode": "complete",
+                "failed_providers": failed_labels,
+            },
+        )
         raise RuntimeError("All LLM providers failed: " + " | ".join(errors))
 
     def stream(self, prompt: str) -> Generator[str, None, None]:
         errors: list[str] = []
+        failed_labels: list[str] = []
         for label, client in self._clients:
             try:
                 yielded = False
@@ -171,7 +223,38 @@ class FallbackLLMClient(ILLMClient):
                     content = client.complete(prompt)
                     if content:
                         yield content
+
+                self._emit_event(
+                    "llm.provider_used",
+                    {"provider": label, "mode": "stream"},
+                )
+                if failed_labels:
+                    self._emit_event(
+                        "llm.fallback_used",
+                        {
+                            "mode": "stream",
+                            "selected_provider": label,
+                            "failed_providers": failed_labels,
+                        },
+                    )
                 return
             except Exception as exc:  # pragma: no cover - provider-specific failures
+                failed_labels.append(label)
+                self._emit_event(
+                    "llm.provider_failed",
+                    {
+                        "provider": label,
+                        "mode": "stream",
+                        "error_type": type(exc).__name__,
+                    },
+                )
                 errors.append(f"{label}: {exc}")
+
+        self._emit_event(
+            "llm.all_failed",
+            {
+                "mode": "stream",
+                "failed_providers": failed_labels,
+            },
+        )
         raise RuntimeError("All LLM providers failed: " + " | ".join(errors))

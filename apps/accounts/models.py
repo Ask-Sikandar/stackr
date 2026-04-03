@@ -1,6 +1,8 @@
 from django.conf import settings
 from django.db import models
 
+from .crypto import decrypt_secret, encrypt_secret
+
 
 class MembershipRole(models.TextChoices):
     OWNER = "owner", "Owner"
@@ -24,6 +26,7 @@ class Organization(models.Model):
     )
     use_private_llm_credentials = models.BooleanField(default=False)
     allow_platform_fallback = models.BooleanField(default=True)
+    custom_instructions = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -92,7 +95,7 @@ class OrganizationLLMKey(models.Model):
         on_delete=models.CASCADE,
     )
     provider = models.CharField(max_length=20, choices=LLMProvider.choices)
-    api_key = models.CharField(max_length=255)
+    api_key = models.CharField(max_length=1024)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -101,5 +104,47 @@ class OrganizationLLMKey(models.Model):
         unique_together = [("organization", "provider")]
         ordering = ["organization", "provider"]
 
+    def set_api_key(self, raw_api_key: str) -> None:
+        self.api_key = encrypt_secret(raw_api_key)
+
+    def get_api_key(self) -> str:
+        return decrypt_secret(self.api_key)
+
+    def get_key_hint(self) -> str:
+        plain = self.get_api_key()
+        if len(plain) < 4:
+            return "****"
+        return f"****{plain[-4:]}"
+
     def __str__(self) -> str:
         return f"{self.organization.name} / {self.provider}"
+
+
+class UsageEvent(models.Model):
+    organization = models.ForeignKey(
+        Organization,
+        related_name="usage_events",
+        on_delete=models.CASCADE,
+    )
+    project = models.ForeignKey(
+        Project,
+        related_name="usage_events",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    event_type = models.CharField(max_length=64, db_index=True)
+    quantity = models.IntegerField(default=1)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["organization", "event_type"]),
+            models.Index(fields=["project", "event_type"]),
+            models.Index(fields=["created_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.organization_id}:{self.project_id}:{self.event_type}:{self.quantity}"

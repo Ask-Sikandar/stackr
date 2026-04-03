@@ -8,6 +8,7 @@ from django.db import transaction
 from django.conf import settings
 
 from apps.accounts.access import get_project_for_user
+from services.metering import record_usage_event
 from .models import Chunk, Document, IngestionJob, IngestionStatus
 from .serializers import ChunkSerializer, DocumentListSerializer, DocumentSerializer, IngestionJobSerializer
 from .tasks import run_ingestion_job, warm_ingestion_worker
@@ -81,6 +82,19 @@ class IngestDocumentView(APIView):
 
         with transaction.atomic():
             job = IngestionJob.objects.create(document=document, status=IngestionStatus.QUEUED)
+
+        if document.project_id is not None:
+            record_usage_event(
+                event_type="ingestion.queued",
+                organization_id=document.project.organization_id,
+                project_id=document.project_id,
+                quantity=1,
+                metadata={
+                    "document_id": document.id,
+                    "job_id": str(job.job_id),
+                    "content_chars": len(document.content or ""),
+                },
+            )
 
         try:
             task_result = run_ingestion_job.delay(str(job.job_id))

@@ -20,15 +20,14 @@ class PgVectorRetriever(IRetriever):
     def __init__(self, embedder: IEmbedder) -> None:
         self._embedder = embedder
 
-    def retrieve(self, query: str, top_k: int = 3) -> list[RetrievedChunk]:
+    def retrieve(self, query: str, top_k: int = 3, project_id: int | None = None) -> list[RetrievedChunk]:
         query_vector = self._embedder.embed(query)
 
-        rows = (
-            Chunk.objects.select_related("document")
-            .exclude(embedding=None)
-            .annotate(distance=CosineDistance("embedding", query_vector))
-            .order_by("distance")[:top_k]
-        )
+        chunks_qs = Chunk.objects.select_related("document").exclude(embedding=None)
+        if project_id is not None:
+            chunks_qs = chunks_qs.filter(document__project_id=project_id)
+
+        rows = chunks_qs.annotate(distance=CosineDistance("embedding", query_vector)).order_by("distance")[:top_k]
 
         results: list[RetrievedChunk] = []
         for chunk in rows:

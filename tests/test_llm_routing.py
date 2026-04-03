@@ -34,12 +34,14 @@ def test_private_mode_prefers_org_key(sample_project):
     sample_project.llm_backup_provider = ""
     sample_project.save(update_fields=["llm_primary_provider", "llm_backup_provider"])
 
-    OrganizationLLMKey.objects.create(
+    key_obj = OrganizationLLMKey.objects.create(
         organization=org,
         provider="openai",
-        api_key="org-openai-key",
+        api_key="placeholder",
         is_active=True,
     )
+    key_obj.set_api_key("org-openai-key")
+    key_obj.save(update_fields=["api_key"])
 
     client = get_llm_client_for_project(sample_project)
     assert isinstance(client, OpenAILLMClient)

@@ -8,6 +8,8 @@ from rest_framework.views import APIView
 from apps.accounts.access import get_project_for_user
 from apps.leads.models import IntentEvent, Lead
 from services.factory import get_agent, get_llm_client_for_project
+from services.instruction_policy import build_merged_instructions
+from services.metering import record_usage_event
 from services.interfaces.intent_classifier import Intent
 
 from .models import Conversation, Message, MessageRole
@@ -65,10 +67,15 @@ class ChatView(APIView):
             project = get_project_for_user(request.user, project_id)
             agent = get_agent()
             llm_client = get_llm_client_for_project(project)
+            merged_instructions = build_merged_instructions(
+                project.organization.custom_instructions,
+                project.custom_instructions,
+            )
             agent_response = agent.handle_message(
                 user_message,
                 llm_client=llm_client,
-                custom_instructions=project.custom_instructions,
+                custom_instructions=merged_instructions,
+                project_id=project.id,
             )
 
             with transaction.atomic():
@@ -92,6 +99,20 @@ class ChatView(APIView):
                     handoff_triggered=agent_response.handoff_triggered,
                 )
                 _update_lead_score(lead, agent_response.intent, agent_response.lead_score_delta, user_message)
+
+            record_usage_event(
+                event_type="chat.response",
+                organization_id=project.organization_id,
+                project_id=project.id,
+                quantity=1,
+                metadata={
+                    "lead_id": str(lead.lead_id),
+                    "intent": agent_response.intent,
+                    "lead_score_delta": agent_response.lead_score_delta,
+                    "message_chars": len(user_message),
+                    "response_chars": len(agent_response.content or ""),
+                },
+            )
 
             return Response(
                 {

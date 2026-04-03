@@ -1,13 +1,16 @@
 from django.db import transaction
+from django.db.models import Count, Sum
+from django.utils.dateparse import parse_datetime
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import Membership, MembershipRole, Organization, OrganizationLLMKey, Project
+from .models import LLMProvider, Membership, MembershipRole, Organization, OrganizationLLMKey, Project, UsageEvent
 from .serializers import (
     OrganizationCreateSerializer,
+    OrganizationLLMKeyRotateSerializer,
     OrganizationLLMKeySerializer,
     OrganizationLLMKeyUpsertSerializer,
     OrganizationSerializer,
@@ -16,6 +19,7 @@ from .serializers import (
     ProjectSerializer,
     ProjectUpdateSerializer,
     RegisterSerializer,
+    UsageEventSerializer,
 )
 
 
@@ -79,6 +83,7 @@ class OrganizationListCreateView(APIView):
                 owner=request.user,
                 use_private_llm_credentials=serializer.validated_data["use_private_llm_credentials"],
                 allow_platform_fallback=serializer.validated_data["allow_platform_fallback"],
+                custom_instructions=serializer.validated_data["custom_instructions"],
             )
             Membership.objects.create(user=request.user, organization=org, role=MembershipRole.OWNER)
 
@@ -165,14 +170,129 @@ class OrganizationLLMKeyListUpsertView(APIView):
         serializer = OrganizationLLMKeyUpsertSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        key_obj, _ = OrganizationLLMKey.objects.update_or_create(
+        key_obj, _ = OrganizationLLMKey.objects.get_or_create(
             organization=org,
             provider=serializer.validated_data["provider"],
-            defaults={
-                "api_key": serializer.validated_data["api_key"],
-                "is_active": serializer.validated_data["is_active"],
-            },
         )
+        key_obj.set_api_key(serializer.validated_data["api_key"])
+        key_obj.is_active = serializer.validated_data["is_active"]
+        key_obj.save()
 
         out = OrganizationLLMKeySerializer(key_obj)
         return Response(out.data, status=status.HTTP_201_CREATED)
+
+
+def _normalize_provider(provider: str) -> str | None:
+    normalized = (provider or "").strip().lower()
+    allowed = {choice.value for choice in LLMProvider}
+    if normalized not in allowed:
+        return None
+    return normalized
+
+
+class OrganizationLLMKeyRotateView(APIView):
+    def post(self, request: Request, organization_id: int, provider: str) -> Response:
+        org = _get_organization_for_user(request.user, organization_id)
+        if org is None:
+            return Response({"error": "Organization not found or access denied."}, status=status.HTTP_403_FORBIDDEN)
+
+        normalized_provider = _normalize_provider(provider)
+        if normalized_provider is None:
+            return Response({"error": "Unsupported provider."}, status=status.HTTP_400_BAD_REQUEST)
+
+        key_obj = OrganizationLLMKey.objects.filter(organization=org, provider=normalized_provider).first()
+        if key_obj is None:
+            return Response({"error": "Provider key not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = OrganizationLLMKeyRotateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        key_obj.set_api_key(serializer.validated_data["api_key"])
+        key_obj.is_active = True
+        key_obj.save(update_fields=["api_key", "is_active", "updated_at"])
+
+        return Response(OrganizationLLMKeySerializer(key_obj).data)
+
+
+class OrganizationLLMKeyRevokeView(APIView):
+    def post(self, request: Request, organization_id: int, provider: str) -> Response:
+        org = _get_organization_for_user(request.user, organization_id)
+        if org is None:
+            return Response({"error": "Organization not found or access denied."}, status=status.HTTP_403_FORBIDDEN)
+
+        normalized_provider = _normalize_provider(provider)
+        if normalized_provider is None:
+            return Response({"error": "Unsupported provider."}, status=status.HTTP_400_BAD_REQUEST)
+
+        key_obj = OrganizationLLMKey.objects.filter(organization=org, provider=normalized_provider).first()
+        if key_obj is None:
+            return Response({"error": "Provider key not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        key_obj.is_active = False
+        key_obj.save(update_fields=["is_active", "updated_at"])
+
+        return Response(OrganizationLLMKeySerializer(key_obj).data)
+
+
+class OrganizationUsageEventsView(APIView):
+    def get(self, request: Request, organization_id: int) -> Response:
+        org = _get_organization_for_user(request.user, organization_id)
+        if org is None:
+            return Response({"error": "Organization not found or access denied."}, status=status.HTTP_403_FORBIDDEN)
+
+        events = UsageEvent.objects.filter(organization=org)
+
+        project_id_raw = request.query_params.get("project_id")
+        project_id: int | None = None
+        if project_id_raw:
+            try:
+                project_id = int(project_id_raw)
+            except (TypeError, ValueError):
+                return Response({"error": "Invalid project_id."}, status=status.HTTP_400_BAD_REQUEST)
+
+            if not org.projects.filter(id=project_id).exists():
+                return Response({"error": "Project not found in organization."}, status=status.HTTP_404_NOT_FOUND)
+            events = events.filter(project_id=project_id)
+
+        event_type = (request.query_params.get("event_type") or "").strip()
+        if event_type:
+            events = events.filter(event_type=event_type)
+
+        since_raw = (request.query_params.get("since") or "").strip()
+        if since_raw:
+            since_dt = parse_datetime(since_raw)
+            if since_dt is None:
+                return Response({"error": "Invalid since datetime."}, status=status.HTTP_400_BAD_REQUEST)
+            events = events.filter(created_at__gte=since_dt)
+
+        until_raw = (request.query_params.get("until") or "").strip()
+        if until_raw:
+            until_dt = parse_datetime(until_raw)
+            if until_dt is None:
+                return Response({"error": "Invalid until datetime."}, status=status.HTTP_400_BAD_REQUEST)
+            events = events.filter(created_at__lte=until_dt)
+
+        totals = list(
+            events.values("event_type")
+            .annotate(total_quantity=Sum("quantity"), event_count=Count("id"))
+            .order_by("event_type")
+        )
+
+        limit_raw = request.query_params.get("limit", "100")
+        try:
+            limit = max(1, min(int(limit_raw), 500))
+        except (TypeError, ValueError):
+            return Response({"error": "Invalid limit value."}, status=status.HTTP_400_BAD_REQUEST)
+
+        recent = events.select_related("project").order_by("-created_at")[:limit]
+        serialized = UsageEventSerializer(recent, many=True)
+
+        return Response(
+            {
+                "organization_id": org.id,
+                "project_id": project_id,
+                "count": events.count(),
+                "totals": totals,
+                "events": serialized.data,
+            }
+        )

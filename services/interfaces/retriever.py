@@ -18,6 +18,6 @@ class IRetriever(ABC):
     """
 
     @abstractmethod
-    def retrieve(self, query: str, top_k: int = 3) -> list[RetrievedChunk]:
+    def retrieve(self, query: str, top_k: int = 3, project_id: int | None = None) -> list[RetrievedChunk]:
         """Return the top_k most relevant chunks for the given query."""
         ...

@@ -4,7 +4,10 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from .views import (
     OrganizationDetailView,
     OrganizationLLMKeyListUpsertView,
+    OrganizationLLMKeyRevokeView,
+    OrganizationLLMKeyRotateView,
     OrganizationListCreateView,
+    OrganizationUsageEventsView,
     ProjectDetailView,
     ProjectListCreateView,
     RegisterView,
@@ -20,6 +23,21 @@ urlpatterns = [
         "organizations/<int:organization_id>/llm-keys/",
         OrganizationLLMKeyListUpsertView.as_view(),
         name="organization-llm-keys",
+    ),
+    path(
+        "organizations/<int:organization_id>/llm-keys/<str:provider>/rotate/",
+        OrganizationLLMKeyRotateView.as_view(),
+        name="organization-llm-key-rotate",
+    ),
+    path(
+        "organizations/<int:organization_id>/llm-keys/<str:provider>/revoke/",
+        OrganizationLLMKeyRevokeView.as_view(),
+        name="organization-llm-key-revoke",
+    ),
+    path(
+        "organizations/<int:organization_id>/usage-events/",
+        OrganizationUsageEventsView.as_view(),
+        name="organization-usage-events",
     ),
     path("projects/", ProjectListCreateView.as_view(), name="project-list-create"),
     path("projects/<int:project_id>/", ProjectDetailView.as_view(), name="project-detail"),

@@ -4,6 +4,7 @@ from django.utils import timezone
 
 from services.factory import get_embedder
 from services.ingestion import ingest_document
+from services.metering import record_usage_event
 
 from .models import IngestionJob, IngestionStatus
 
@@ -45,6 +46,20 @@ def run_ingestion_job(self, job_id: str) -> dict[str, object]:
         job.error_message = str(exc)
         job.finished_at = timezone.now()
         job.save(update_fields=["status", "retries", "error_message", "finished_at"])
+
+        if job.document.project_id is not None:
+            record_usage_event(
+                event_type="ingestion.failed",
+                organization_id=job.document.project.organization_id,
+                project_id=job.document.project_id,
+                quantity=1,
+                metadata={
+                    "job_id": str(job.job_id),
+                    "document_id": job.document_id,
+                    "retries": retries,
+                    "error": str(exc),
+                },
+            )
         return {
             "job_id": str(job.job_id),
             "status": str(job.status),
@@ -56,6 +71,20 @@ def run_ingestion_job(self, job_id: str) -> dict[str, object]:
     job.finished_at = timezone.now()
     job.error_message = ""
     job.save(update_fields=["status", "finished_at", "error_message"])
+
+    if job.document.project_id is not None:
+        record_usage_event(
+            event_type="ingestion.succeeded",
+            organization_id=job.document.project.organization_id,
+            project_id=job.document.project_id,
+            quantity=len(chunks),
+            metadata={
+                "job_id": str(job.job_id),
+                "document_id": job.document_id,
+                "content_chars": len(job.document.content or ""),
+                "chunks_created": len(chunks),
+            },
+        )
 
     return {
         "job_id": str(job.job_id),

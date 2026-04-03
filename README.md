@@ -113,6 +113,9 @@ uv run python eval/eval_quality.py --mock
 | GET/POST | `/api/accounts/organizations/` | List/create organizations for current user |
 | PATCH | `/api/accounts/organizations/<id>/` | Update organization routing flags |
 | GET/POST | `/api/accounts/organizations/<id>/llm-keys/` | List/upsert organization LLM API keys |
+| POST | `/api/accounts/organizations/<id>/llm-keys/<provider>/rotate/` | Rotate provider key and reactivate it |
+| POST | `/api/accounts/organizations/<id>/llm-keys/<provider>/revoke/` | Revoke (disable) provider key |
+| GET | `/api/accounts/organizations/<id>/usage-events/` | List and aggregate usage events (supports filters) |
 | GET/POST | `/api/accounts/projects/` | List/create projects for current user |
 | PATCH | `/api/accounts/projects/<id>/` | Update project provider preferences |
 | GET/POST | `/api/documents/` | List / upload documents |
@@ -129,7 +132,7 @@ uv run python eval/eval_quality.py --mock
 
 ```json
 POST /api/ai/chat/
-{ "lead_id": "uuid", "message": "How much is a 40ft container?" }
+{ "lead_id": "uuid", "project_id": 7, "message": "How much is a 40ft container?" }
 
 {
   "message_id": "uuid",
@@ -142,6 +145,14 @@ POST /api/ai/chat/
 }
 ```
 
+### WebSocket tenant-scoped payload
+
+When using tenant-scoped chat over WebSocket, include both `project_id` and `access_token` in the chat frame:
+
+```json
+{ "type": "chat", "lead_id": "uuid", "message": "Need pricing", "project_id": 7, "access_token": "<jwt>" }
+```
+
 ## Key Design Decisions
 
 See [DECISIONS.md](DECISIONS.md) for full reasoning.
@@ -151,4 +162,10 @@ See [DECISIONS.md](DECISIONS.md) for full reasoning.
 - **Keyword intent classification** — sub-ms, fully testable, accurate for 4 categories
 - **SOLID service layer** — ABCs + `SERVICE_CLASSES` registry; tests inject mocks
 - **Lead scoring dashboard** — added beyond spec: conversion=25pts, pricing=10pts
+
+## Billing-Ready Hooks
+
+- Usage events are recorded in `accounts_usageevent` with organization/project attribution.
+- Current emitted event types include `chat.response`, `ingestion.queued`, `ingestion.succeeded`, `ingestion.failed`, `llm.provider_used`, `llm.provider_failed`, `llm.fallback_used`, and `llm.all_failed`.
+- These are hooks only (no payment integration yet) and are intentionally best-effort/non-blocking.
 

@@ -2,7 +2,12 @@ from django.contrib.auth.models import User
 from rest_framework import serializers
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from .models import LLMProvider, Membership, MembershipRole, Organization, OrganizationLLMKey, Project
+from .models import LLMProvider, Membership, MembershipRole, Organization, OrganizationLLMKey, Project, UsageEvent
+from services.instruction_policy import (
+    MAX_ORG_CUSTOM_INSTRUCTIONS,
+    MAX_PROJECT_CUSTOM_INSTRUCTIONS,
+    validate_custom_instructions,
+)
 
 
 class RegisterSerializer(serializers.Serializer):
@@ -53,6 +58,7 @@ class OrganizationSerializer(serializers.ModelSerializer):
             "owner_id",
             "use_private_llm_credentials",
             "allow_platform_fallback",
+            "custom_instructions",
             "created_at",
         ]
         read_only_fields = ["owner_id", "created_at"]
@@ -79,12 +85,26 @@ class OrganizationCreateSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=255)
     use_private_llm_credentials = serializers.BooleanField(default=False)
     allow_platform_fallback = serializers.BooleanField(default=True)
+    custom_instructions = serializers.CharField(required=False, allow_blank=True, default="")
+
+    def validate_custom_instructions(self, value: str) -> str:
+        try:
+            return validate_custom_instructions(value, max_length=MAX_ORG_CUSTOM_INSTRUCTIONS)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
 
 
 class OrganizationUpdateSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=255, required=False)
     use_private_llm_credentials = serializers.BooleanField(required=False)
     allow_platform_fallback = serializers.BooleanField(required=False)
+    custom_instructions = serializers.CharField(required=False, allow_blank=True)
+
+    def validate_custom_instructions(self, value: str) -> str:
+        try:
+            return validate_custom_instructions(value, max_length=MAX_ORG_CUSTOM_INSTRUCTIONS)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
 
 
 class ProjectCreateSerializer(serializers.Serializer):
@@ -94,12 +114,24 @@ class ProjectCreateSerializer(serializers.Serializer):
     llm_backup_provider = serializers.ChoiceField(choices=LLMProvider.choices, required=False, allow_blank=True, default="")
     custom_instructions = serializers.CharField(required=False, allow_blank=True, default="")
 
+    def validate_custom_instructions(self, value: str) -> str:
+        try:
+            return validate_custom_instructions(value, max_length=MAX_PROJECT_CUSTOM_INSTRUCTIONS)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+
 
 class ProjectUpdateSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=255, required=False)
     llm_primary_provider = serializers.ChoiceField(choices=LLMProvider.choices, required=False)
     llm_backup_provider = serializers.ChoiceField(choices=LLMProvider.choices, required=False, allow_blank=True)
     custom_instructions = serializers.CharField(required=False, allow_blank=True)
+
+    def validate_custom_instructions(self, value: str) -> str:
+        try:
+            return validate_custom_instructions(value, max_length=MAX_PROJECT_CUSTOM_INSTRUCTIONS)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
 
 
 class OrganizationLLMKeySerializer(serializers.ModelSerializer):
@@ -111,12 +143,34 @@ class OrganizationLLMKeySerializer(serializers.ModelSerializer):
 
     @staticmethod
     def get_key_hint(obj: OrganizationLLMKey) -> str:
-        if len(obj.api_key) < 4:
+        try:
+            return obj.get_key_hint()
+        except Exception:
             return "****"
-        return f"****{obj.api_key[-4:]}"
 
 
 class OrganizationLLMKeyUpsertSerializer(serializers.Serializer):
     provider = serializers.ChoiceField(choices=LLMProvider.choices)
     api_key = serializers.CharField(min_length=8, max_length=255)
     is_active = serializers.BooleanField(default=True)
+
+
+class OrganizationLLMKeyRotateSerializer(serializers.Serializer):
+    api_key = serializers.CharField(min_length=8, max_length=255)
+
+
+class UsageEventSerializer(serializers.ModelSerializer):
+    organization_id = serializers.IntegerField(source="organization.id", read_only=True)
+    project_id = serializers.IntegerField(source="project.id", read_only=True, allow_null=True)
+
+    class Meta:
+        model = UsageEvent
+        fields = [
+            "id",
+            "organization_id",
+            "project_id",
+            "event_type",
+            "quantity",
+            "metadata",
+            "created_at",
+        ]

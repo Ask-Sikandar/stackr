@@ -74,13 +74,19 @@ class AgentHandler:
         self._prompt_builder = prompt_builder or get_prompt_builder()
         self._intent_classifier = intent_classifier or get_intent_classifier()
 
-    def handle_message(self, message: str, llm_client=None, custom_instructions: str | None = None) -> AgentResponse:
+    def handle_message(
+        self,
+        message: str,
+        llm_client=None,
+        custom_instructions: str | None = None,
+        project_id: int | None = None,
+    ) -> AgentResponse:
         """
         Full pipeline: classify → retrieve → prompt → complete → structure.
         Use this for the REST endpoint where streaming is not required.
         """
         intent = self._intent_classifier.classify(message)
-        context = self._retriever.retrieve(message)
+        context = self._retriever.retrieve(message, project_id=project_id)
         prompt = self._prompt_builder.build(
             message,
             context,
@@ -95,6 +101,7 @@ class AgentHandler:
         message: str,
         llm_client=None,
         custom_instructions: str | None = None,
+        project_id: int | None = None,
     ) -> Generator[str | AgentResponse, None, None]:
         """
         Streaming pipeline for the WebSocket consumer.
@@ -103,7 +110,7 @@ class AgentHandler:
           - a final AgentResponse object signalling completion
         """
         intent = self._intent_classifier.classify(message)
-        context = self._retriever.retrieve(message)
+        context = self._retriever.retrieve(message, project_id=project_id)
         prompt = self._prompt_builder.build(
             message,
             context,

@@ -33,7 +33,7 @@ class MockEmbedder(IEmbedder):
 class MockRetriever(IRetriever):
     """Returns two canned chunks regardless of query."""
 
-    def retrieve(self, query: str, top_k: int = 3) -> list[RetrievedChunk]:
+    def retrieve(self, query: str, top_k: int = 3, project_id: int | None = None) -> list[RetrievedChunk]:
         return [
             RetrievedChunk(
                 content="40ft standard container: $3,850. 20ft: $2,100.",

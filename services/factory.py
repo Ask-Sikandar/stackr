@@ -104,14 +104,15 @@ def get_llm_client_for_project(project) -> ILLMClient:
             if key_obj is None:
                 continue
             try:
-                clients.append((f"private:{provider}", _build_provider_client(provider, api_key=key_obj.api_key)))
-            except ValueError:
+                private_api_key = key_obj.get_api_key()
+                clients.append((f"private:{provider}", _build_provider_client(provider, api_key=private_api_key)))
+            except (ValueError, RuntimeError):
                 continue
 
         if clients and not org.allow_platform_fallback:
             if len(clients) == 1:
                 return clients[0][1]
-            return FallbackLLMClient(clients)
+            return FallbackLLMClient(clients, organization_id=org.id, project_id=project.id)
 
         if not clients and not org.allow_platform_fallback:
             raise RuntimeError(
@@ -130,7 +131,7 @@ def get_llm_client_for_project(project) -> ILLMClient:
 
     if len(clients) == 1:
         return clients[0][1]
-    return FallbackLLMClient(clients)
+    return FallbackLLMClient(clients, organization_id=org.id, project_id=project.id)
 
 
 @lru_cache(maxsize=1)

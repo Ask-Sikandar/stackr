@@ -190,3 +190,29 @@ def test_agent_handle_message_uses_override_llm(agent):
 
     response = agent.handle_message("How much is a 40ft container?", llm_client=OverrideLLM())
     assert response.content == "override-response"
+
+
+def test_agent_handle_message_passes_project_id_to_retriever():
+    capture = {}
+
+    class CaptureRetriever:
+        def retrieve(self, query: str, top_k: int = 3, project_id: int | None = None):
+            capture["project_id"] = project_id
+            return []
+
+    class SimpleLLM:
+        def complete(self, prompt: str) -> str:
+            return "ok"
+
+        def stream(self, prompt: str):
+            yield "ok"
+
+    test_agent = AgentHandler(
+        retriever=CaptureRetriever(),
+        llm_client=SimpleLLM(),
+        prompt_builder=SalesPromptBuilder(),
+        intent_classifier=KeywordIntentClassifier(),
+    )
+
+    test_agent.handle_message("Need pricing", project_id=123)
+    assert capture["project_id"] == 123

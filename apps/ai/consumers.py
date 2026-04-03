@@ -36,6 +36,8 @@ from apps.accounts.access import get_project_for_user
 from apps.leads.models import IntentEvent, Lead
 from services.agent import AgentHandler, AgentResponse
 from services.factory import get_agent, get_llm_client_for_project
+from services.instruction_policy import build_merged_instructions
+from services.metering import record_usage_event
 
 from .models import Conversation, Message, MessageRole
 
@@ -93,11 +95,19 @@ class ChatConsumer(AsyncWebsocketConsumer):
             try:
                 agent: AgentHandler = get_agent()
                 llm_client = get_llm_client_for_project(project) if project is not None else None
-                custom_instructions = project.custom_instructions if project is not None else None
+                custom_instructions = (
+                    build_merged_instructions(
+                        project.organization.custom_instructions,
+                        project.custom_instructions,
+                    )
+                    if project is not None
+                    else None
+                )
                 for item in agent.stream_message(
                     user_message,
                     llm_client=llm_client,
                     custom_instructions=custom_instructions,
+                    project_id=project.id if project is not None else None,
                 ):
                     if isinstance(item, AgentResponse):
                         asyncio.run_coroutine_threadsafe(
@@ -208,6 +218,22 @@ def _persist_and_score(lead_id: str, user_message: str, response: AgentResponse,
         message_preview=user_message[:120],
         score_delta=response.lead_score_delta,
     )
+
+    project_ref = project or lead.project
+    if project_ref is not None:
+        record_usage_event(
+            event_type="chat.response",
+            organization_id=project_ref.organization_id,
+            project_id=project_ref.id,
+            quantity=1,
+            metadata={
+                "lead_id": str(lead.lead_id),
+                "intent": response.intent,
+                "lead_score_delta": response.lead_score_delta,
+                "message_chars": len(user_message),
+                "response_chars": len(response.content or ""),
+            },
+        )
     return lead
 
 
