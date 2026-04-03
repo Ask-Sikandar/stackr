@@ -13,3 +13,5 @@ wheels/
 frontend/.next/
 frontend/next-env.d.ts
 frontend/package-lock.json
+
+*package-lock.json

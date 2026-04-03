@@ -66,6 +66,7 @@ export interface Document {
   source_type: string;
   uploaded_at: string;
   processed: boolean;
+  project_id: number;
   chunk_count: number;
 }
 
@@ -74,6 +75,30 @@ export interface Chunk {
   chunk_index: number;
   content: string;
   metadata: Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// Account / Tenant types
+// ---------------------------------------------------------------------------
+
+export interface Organization {
+  id: number;
+  name: string;
+  owner_id: number;
+  use_private_llm_credentials: boolean;
+  allow_platform_fallback: boolean;
+  custom_instructions: string;
+  created_at: string;
+}
+
+export interface Project {
+  id: number;
+  name: string;
+  organization_id: number;
+  llm_primary_provider: string;
+  llm_backup_provider: string;
+  custom_instructions: string;
+  created_at: string;
 }
 
 // ---------------------------------------------------------------------------
