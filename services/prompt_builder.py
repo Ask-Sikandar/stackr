@@ -25,6 +25,10 @@ let me connect you with our sales team."
 5. When appropriate, guide the prospect toward the next step: getting a quote, \
 placing an order, or speaking with a sales rep.
 
+<custom_instructions>
+{custom_instructions_block}
+</custom_instructions>
+
 <context>
 {context_block}
 </context>
@@ -32,9 +36,18 @@ placing an order, or speaking with a sales rep.
 
 
 class SalesPromptBuilder(IPromptBuilder):
-    def build(self, query: str, context: list[RetrievedChunk]) -> str:
+    def build(
+        self,
+        query: str,
+        context: list[RetrievedChunk],
+        custom_instructions: str | None = None,
+    ) -> str:
         context_block = self._format_context(context)
-        system = _SYSTEM_PROMPT.format(context_block=context_block)
+        custom_block = custom_instructions.strip() if custom_instructions else "(none)"
+        system = _SYSTEM_PROMPT.format(
+            context_block=context_block,
+            custom_instructions_block=custom_block,
+        )
         return f"{system}\nUser: {query}\nContainerBot:"
 
     @staticmethod

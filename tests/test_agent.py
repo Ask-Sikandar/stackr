@@ -103,6 +103,16 @@ def test_prompt_builder_cites_source_title():
     assert "Delivery Policy" in prompt
 
 
+def test_prompt_builder_includes_custom_instructions():
+    builder = SalesPromptBuilder()
+    prompt = builder.build(
+        "What can you do?",
+        [],
+        custom_instructions="Always respond in bullet points.",
+    )
+    assert "Always respond in bullet points." in prompt
+
+
 # ---------------------------------------------------------------------------
 # AgentHandler (fully mocked)
 # ---------------------------------------------------------------------------
@@ -168,3 +178,15 @@ def test_agent_stream_yields_tokens_then_response(agent):
     # All items before last should be strings (tokens)
     for item in items[:-1]:
         assert isinstance(item, str)
+
+
+def test_agent_handle_message_uses_override_llm(agent):
+    class OverrideLLM:
+        def complete(self, prompt: str) -> str:
+            return "override-response"
+
+        def stream(self, prompt: str):
+            yield "override-response"
+
+    response = agent.handle_message("How much is a 40ft container?", llm_client=OverrideLLM())
+    assert response.content == "override-response"

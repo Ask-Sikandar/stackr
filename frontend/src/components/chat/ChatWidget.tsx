@@ -9,6 +9,8 @@ interface ChatWidgetProps {
   leadId: string;
   apiUrl: string;
   wsUrl: string;
+  projectId?: number;
+  accessToken?: string;
 }
 
 function TypingIndicator() {
@@ -38,7 +40,7 @@ function ConnectionBanner({ isConnecting }: { isConnecting: boolean }) {
   );
 }
 
-export function ChatWidget({ leadId, apiUrl: _apiUrl, wsUrl }: ChatWidgetProps) {
+export function ChatWidget({ leadId, apiUrl: _apiUrl, wsUrl, projectId, accessToken }: ChatWidgetProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: "welcome",
@@ -142,8 +144,14 @@ export function ChatWidget({ leadId, apiUrl: _apiUrl, wsUrl }: ChatWidgetProps) 
       { id: `user-${Date.now()}`, role: "user", content: text },
     ]);
     setInput("");
-    send({ type: "chat", message: text, lead_id: leadId });
-  }, [input, isConnected, send, leadId]);
+    send({
+      type: "chat",
+      message: text,
+      lead_id: leadId,
+      ...(typeof projectId === "number" ? { project_id: projectId } : {}),
+      ...(accessToken ? { access_token: accessToken } : {}),
+    });
+  }, [input, isConnected, send, leadId, projectId, accessToken]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {

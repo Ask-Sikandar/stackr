@@ -53,7 +53,7 @@ export interface ChatMessage {
 export type WsInboundMessage =
   | { type: "typing"; status: boolean }
   | { type: "stream"; token: string }
-  | { type: "message"; message_id: string; content: string; intent: Intent; sources: Source[]; components: Component[]; handoff_triggered: boolean; lead_score: number }
+  | { type: "message"; message_id: string; content: string; intent: Intent; sources: Source[]; components: Component[]; handoff_triggered: boolean; lead_score: number; project_id?: number }
   | { type: "error"; message: string };
 
 // ---------------------------------------------------------------------------

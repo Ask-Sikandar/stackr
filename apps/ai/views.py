@@ -65,7 +65,11 @@ class ChatView(APIView):
             project = get_project_for_user(request.user, project_id)
             agent = get_agent()
             llm_client = get_llm_client_for_project(project)
-            agent_response = agent.handle_message(user_message, llm_client=llm_client)
+            agent_response = agent.handle_message(
+                user_message,
+                llm_client=llm_client,
+                custom_instructions=project.custom_instructions,
+            )
 
             with transaction.atomic():
                 lead = _get_or_create_lead(lead_id, project)
