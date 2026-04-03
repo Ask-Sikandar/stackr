@@ -111,13 +111,16 @@ uv run python eval/eval_quality.py --mock
 | POST | `/api/accounts/token/` | Obtain JWT access/refresh tokens |
 | POST | `/api/accounts/token/refresh/` | Refresh JWT access token |
 | GET/POST | `/api/accounts/organizations/` | List/create organizations for current user |
+| PATCH | `/api/accounts/organizations/<id>/` | Update organization routing flags |
+| GET/POST | `/api/accounts/organizations/<id>/llm-keys/` | List/upsert organization LLM API keys |
 | GET/POST | `/api/accounts/projects/` | List/create projects for current user |
+| PATCH | `/api/accounts/projects/<id>/` | Update project provider preferences |
 | GET/POST | `/api/documents/` | List / upload documents |
 | POST | `/api/documents/ingestion/warm/` | Queue ingestion worker warm-up |
 | POST | `/api/documents/<id>/ingest/` | Queue ingestion job (returns 202) |
 | GET | `/api/documents/ingest-jobs/<job_id>/` | Ingestion job status |
 | GET | `/api/documents/<id>/chunks/` | List chunks |
-| POST | `/api/ai/chat/` | Single-turn chat (REST) |
+| POST | `/api/ai/chat/` | Single-turn chat (REST, requires `project_id`) |
 | GET | `/api/ai/chat/history/<lead_id>/` | Conversation history |
 | GET | `/api/leads/` | Lead list (dashboard) |
 | WS | `/ws/chat/<lead_id>/` | Bidirectional chat with streaming |

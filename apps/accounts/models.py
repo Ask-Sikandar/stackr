@@ -9,6 +9,12 @@ class MembershipRole(models.TextChoices):
     VIEWER = "viewer", "Viewer"
 
 
+class LLMProvider(models.TextChoices):
+    OLLAMA = "ollama", "Ollama"
+    OPENAI = "openai", "OpenAI"
+    GEMINI = "gemini", "Gemini"
+
+
 class Organization(models.Model):
     name = models.CharField(max_length=255)
     owner = models.ForeignKey(
@@ -16,6 +22,8 @@ class Organization(models.Model):
         related_name="owned_organizations",
         on_delete=models.CASCADE,
     )
+    use_private_llm_credentials = models.BooleanField(default=False)
+    allow_platform_fallback = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -55,6 +63,18 @@ class Project(models.Model):
         on_delete=models.CASCADE,
     )
     name = models.CharField(max_length=255)
+    llm_primary_provider = models.CharField(
+        max_length=20,
+        choices=LLMProvider.choices,
+        default=LLMProvider.OLLAMA,
+    )
+    llm_backup_provider = models.CharField(
+        max_length=20,
+        choices=LLMProvider.choices,
+        blank=True,
+        default="",
+    )
+    custom_instructions = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -63,3 +83,23 @@ class Project(models.Model):
 
     def __str__(self) -> str:
         return f"{self.organization.name} / {self.name}"
+
+
+class OrganizationLLMKey(models.Model):
+    organization = models.ForeignKey(
+        Organization,
+        related_name="llm_keys",
+        on_delete=models.CASCADE,
+    )
+    provider = models.CharField(max_length=20, choices=LLMProvider.choices)
+    api_key = models.CharField(max_length=255)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [("organization", "provider")]
+        ordering = ["organization", "provider"]
+
+    def __str__(self) -> str:
+        return f"{self.organization.name} / {self.provider}"

@@ -7,7 +7,7 @@ from rest_framework.views import APIView
 
 from apps.accounts.access import get_project_for_user
 from apps.leads.models import IntentEvent, Lead
-from services.factory import get_agent
+from services.factory import get_agent, get_llm_client_for_project
 from services.interfaces.intent_classifier import Intent
 
 from .models import Conversation, Message, MessageRole
@@ -64,7 +64,8 @@ class ChatView(APIView):
         try:
             project = get_project_for_user(request.user, project_id)
             agent = get_agent()
-            agent_response = agent.handle_message(user_message)
+            llm_client = get_llm_client_for_project(project)
+            agent_response = agent.handle_message(user_message, llm_client=llm_client)
 
             with transaction.atomic():
                 lead = _get_or_create_lead(lead_id, project)

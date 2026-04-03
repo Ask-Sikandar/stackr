@@ -20,6 +20,7 @@ from .interfaces.intent_classifier import IIntentClassifier
 from .interfaces.llm_client import ILLMClient
 from .interfaces.prompt_builder import IPromptBuilder
 from .interfaces.retriever import IRetriever
+from .llm import FallbackLLMClient, GeminiLLMClient, OllamaLLMClient, OpenAILLMClient
 
 
 def _load(key: str):
@@ -51,6 +52,85 @@ def get_retriever() -> IRetriever:
 @lru_cache(maxsize=1)
 def get_llm_client() -> ILLMClient:
     return _load("LLM_CLIENT")()
+
+
+def _provider_chain(primary: str, backup: str) -> list[str]:
+    chain: list[str] = []
+    for provider in [primary, backup]:
+        normalized = (provider or "").strip().lower()
+        if normalized and normalized not in chain:
+            chain.append(normalized)
+    return chain
+
+
+def _build_provider_client(provider: str, api_key: str | None = None) -> ILLMClient:
+    provider = provider.lower()
+    if provider == "ollama":
+        return OllamaLLMClient()
+    if provider == "openai":
+        key = api_key or getattr(settings, "OPENAI_API_KEY", "")
+        if not key:
+            raise ValueError("OpenAI provider configured but OPENAI_API_KEY is missing.")
+        return OpenAILLMClient(api_key=key)
+    if provider == "gemini":
+        key = api_key or getattr(settings, "GEMINI_API_KEY", "")
+        if not key:
+            raise ValueError("Gemini provider configured but GEMINI_API_KEY is missing.")
+        return GeminiLLMClient(api_key=key)
+    raise ValueError(f"Unsupported LLM provider: {provider}")
+
+
+def get_llm_client_for_project(project) -> ILLMClient:
+    from apps.accounts.models import OrganizationLLMKey
+
+    org = project.organization
+    preferred_chain = _provider_chain(project.llm_primary_provider, project.llm_backup_provider)
+    platform_chain = _provider_chain(
+        getattr(settings, "LLM_PRIMARY_PROVIDER", "ollama"),
+        getattr(settings, "LLM_BACKUP_PROVIDER", ""),
+    )
+    if not preferred_chain:
+        preferred_chain = platform_chain
+
+    clients: list[tuple[str, ILLMClient]] = []
+
+    if org.use_private_llm_credentials:
+        for provider in preferred_chain:
+            key_obj = OrganizationLLMKey.objects.filter(
+                organization=org,
+                provider=provider,
+                is_active=True,
+            ).first()
+            if key_obj is None:
+                continue
+            try:
+                clients.append((f"private:{provider}", _build_provider_client(provider, api_key=key_obj.api_key)))
+            except ValueError:
+                continue
+
+        if clients and not org.allow_platform_fallback:
+            if len(clients) == 1:
+                return clients[0][1]
+            return FallbackLLMClient(clients)
+
+        if not clients and not org.allow_platform_fallback:
+            raise RuntimeError(
+                "Private LLM key usage is enabled but no active private provider keys are configured."
+            )
+
+    platform_candidates = preferred_chain + [p for p in platform_chain if p not in preferred_chain]
+    for provider in platform_candidates:
+        try:
+            clients.append((f"platform:{provider}", _build_provider_client(provider)))
+        except ValueError:
+            continue
+
+    if not clients:
+        raise RuntimeError("No LLM providers are configured for this project.")
+
+    if len(clients) == 1:
+        return clients[0][1]
+    return FallbackLLMClient(clients)
 
 
 @lru_cache(maxsize=1)

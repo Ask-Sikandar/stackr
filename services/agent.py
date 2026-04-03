@@ -74,7 +74,7 @@ class AgentHandler:
         self._prompt_builder = prompt_builder or get_prompt_builder()
         self._intent_classifier = intent_classifier or get_intent_classifier()
 
-    def handle_message(self, message: str) -> AgentResponse:
+    def handle_message(self, message: str, llm_client=None) -> AgentResponse:
         """
         Full pipeline: classify → retrieve → prompt → complete → structure.
         Use this for the REST endpoint where streaming is not required.
@@ -82,10 +82,11 @@ class AgentHandler:
         intent = self._intent_classifier.classify(message)
         context = self._retriever.retrieve(message)
         prompt = self._prompt_builder.build(message, context)
-        content = self._llm.complete(prompt)
+        llm = llm_client or self._llm
+        content = llm.complete(prompt)
         return self._build_response(content, intent, context)
 
-    def stream_message(self, message: str) -> Generator[str | AgentResponse, None, None]:
+    def stream_message(self, message: str, llm_client=None) -> Generator[str | AgentResponse, None, None]:
         """
         Streaming pipeline for the WebSocket consumer.
         Yields:
@@ -97,7 +98,8 @@ class AgentHandler:
         prompt = self._prompt_builder.build(message, context)
 
         full_content = ""
-        for token in self._llm.stream(prompt):
+        llm = llm_client or self._llm
+        for token in llm.stream(prompt):
             full_content += token
             yield token  # caller sends this over WebSocket immediately
 
