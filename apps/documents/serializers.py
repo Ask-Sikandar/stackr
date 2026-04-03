@@ -11,6 +11,7 @@ class ChunkSerializer(serializers.ModelSerializer):
 
 class DocumentSerializer(serializers.ModelSerializer):
     chunk_count = serializers.SerializerMethodField()
+    project_id = serializers.IntegerField(source="project.id", read_only=True)
 
     class Meta:
         model = Document
@@ -22,6 +23,7 @@ class DocumentSerializer(serializers.ModelSerializer):
             "file_url",
             "uploaded_at",
             "processed",
+            "project_id",
             "chunk_count",
         ]
         read_only_fields = ["uploaded_at", "processed", "chunk_count"]
@@ -34,10 +36,11 @@ class DocumentListSerializer(serializers.ModelSerializer):
     """Lightweight serializer for list views — omits full content."""
 
     chunk_count = serializers.SerializerMethodField()
+    project_id = serializers.IntegerField(source="project.id", read_only=True)
 
     class Meta:
         model = Document
-        fields = ["id", "title", "source_type", "uploaded_at", "processed", "chunk_count"]
+        fields = ["id", "title", "source_type", "uploaded_at", "processed", "project_id", "chunk_count"]
         read_only_fields = ["uploaded_at", "processed"]
 
     def get_chunk_count(self, obj: Document) -> int:
@@ -46,12 +49,14 @@ class DocumentListSerializer(serializers.ModelSerializer):
 
 class IngestionJobSerializer(serializers.ModelSerializer):
     document_id = serializers.IntegerField(source="document.id", read_only=True)
+    project_id = serializers.IntegerField(source="document.project.id", read_only=True)
 
     class Meta:
         model = IngestionJob
         fields = [
             "job_id",
             "document_id",
+            "project_id",
             "status",
             "task_id",
             "retries",

@@ -28,6 +28,13 @@ class Document(models.Model):
     file_url = models.URLField(blank=True, default="")
     uploaded_at = models.DateTimeField(auto_now_add=True)
     processed = models.BooleanField(default=False)
+    project = models.ForeignKey(
+        "accounts.Project",
+        related_name="documents",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+    )
 
     class Meta:
         ordering = ["-uploaded_at"]

@@ -12,6 +12,7 @@ class IntentEventSerializer(serializers.ModelSerializer):
 class LeadSerializer(serializers.ModelSerializer):
     intent_events = IntentEventSerializer(many=True, read_only=True)
     message_count = serializers.SerializerMethodField()
+    project_id = serializers.IntegerField(source="project.id", read_only=True)
 
     class Meta:
         model = Lead
@@ -22,6 +23,7 @@ class LeadSerializer(serializers.ModelSerializer):
             "last_seen_at",
             "score",
             "last_intent",
+            "project_id",
             "message_count",
             "intent_events",
         ]
@@ -34,10 +36,11 @@ class LeadListSerializer(serializers.ModelSerializer):
     """Lightweight for dashboard list — no nested events."""
 
     message_count = serializers.SerializerMethodField()
+    project_id = serializers.IntegerField(source="project.id", read_only=True)
 
     class Meta:
         model = Lead
-        fields = ["id", "lead_id", "score", "last_intent", "last_seen_at", "message_count"]
+        fields = ["id", "lead_id", "project_id", "score", "last_intent", "last_seen_at", "message_count"]
 
     def get_message_count(self, obj: Lead) -> int:
         return sum(c.messages.count() for c in obj.conversations.all())

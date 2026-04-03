@@ -1,11 +1,13 @@
 from rest_framework import status
 from rest_framework.generics import ListCreateAPIView, RetrieveAPIView
+from rest_framework.exceptions import ValidationError
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.db import transaction
 from django.conf import settings
 
+from apps.accounts.access import get_project_for_user
 from .models import Chunk, Document, IngestionJob, IngestionStatus
 from .serializers import ChunkSerializer, DocumentListSerializer, DocumentSerializer, IngestionJobSerializer
 from .tasks import run_ingestion_job, warm_ingestion_worker
@@ -15,7 +17,11 @@ class DocumentListCreateView(ListCreateAPIView):
     """GET /api/documents/  — list all documents (lightweight)
     POST /api/documents/ — upload a new document"""
 
-    queryset = Document.objects.all()
+    def get_queryset(self):
+        return Document.objects.filter(
+            project__organization__memberships__user=self.request.user,
+            project__organization__memberships__is_active=True,
+        ).distinct()
 
     def get_serializer_class(self):
         if self.request.method == "GET":
@@ -23,7 +29,15 @@ class DocumentListCreateView(ListCreateAPIView):
         return DocumentSerializer
 
     def perform_create(self, serializer):
-        document = serializer.save()
+        project_id = self.request.data.get("project_id")
+        if project_id is None:
+            raise ValidationError({"project_id": "This field is required."})
+        try:
+            project = get_project_for_user(self.request.user, int(project_id))
+        except ValueError as exc:
+            raise ValidationError({"project_id": "Invalid project id."}) from exc
+
+        document = serializer.save(project=project)
         if bool(getattr(settings, "INGESTION_WARM_ON_UPLOAD", True)):
             try:
                 warm_ingestion_worker.delay()
@@ -36,8 +50,13 @@ class DocumentListCreateView(ListCreateAPIView):
 class DocumentDetailView(RetrieveAPIView):
     """GET /api/documents/<id>/ — full document detail"""
 
-    queryset = Document.objects.all()
     serializer_class = DocumentSerializer
+
+    def get_queryset(self):
+        return Document.objects.filter(
+            project__organization__memberships__user=self.request.user,
+            project__organization__memberships__is_active=True,
+        ).distinct()
 
 
 class IngestDocumentView(APIView):
@@ -45,7 +64,11 @@ class IngestDocumentView(APIView):
 
     def post(self, request: Request, pk: int) -> Response:
         try:
-            document = Document.objects.get(pk=pk)
+            document = Document.objects.filter(
+                pk=pk,
+                project__organization__memberships__user=request.user,
+                project__organization__memberships__is_active=True,
+            ).distinct().get()
         except Document.DoesNotExist:
             return Response({"error": "Document not found."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -82,7 +105,11 @@ class ChunkListView(APIView):
 
     def get(self, request: Request, pk: int) -> Response:
         try:
-            document = Document.objects.get(pk=pk)
+            document = Document.objects.filter(
+                pk=pk,
+                project__organization__memberships__user=request.user,
+                project__organization__memberships__is_active=True,
+            ).distinct().get()
         except Document.DoesNotExist:
             return Response({"error": "Document not found."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -96,7 +123,11 @@ class IngestionJobStatusView(APIView):
 
     def get(self, request: Request, job_id) -> Response:
         try:
-            job = IngestionJob.objects.select_related("document").get(job_id=job_id)
+            job = IngestionJob.objects.select_related("document").filter(
+                job_id=job_id,
+                document__project__organization__memberships__user=request.user,
+                document__project__organization__memberships__is_active=True,
+            ).distinct().get()
         except IngestionJob.DoesNotExist:
             return Response({"error": "Ingestion job not found."}, status=status.HTTP_404_NOT_FOUND)
 

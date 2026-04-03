@@ -18,6 +18,13 @@ class Lead(models.Model):
     last_seen_at = models.DateTimeField(auto_now=True)
     score = models.IntegerField(default=0)
     last_intent = models.CharField(max_length=20, blank=True, default="")
+    project = models.ForeignKey(
+        "accounts.Project",
+        related_name="leads",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+    )
 
     class Meta:
         ordering = ["-score", "-last_seen_at"]

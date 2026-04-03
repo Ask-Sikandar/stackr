@@ -107,6 +107,11 @@ uv run python eval/eval_quality.py --mock
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
+| POST | `/api/accounts/register/` | Create account and optional organization |
+| POST | `/api/accounts/token/` | Obtain JWT access/refresh tokens |
+| POST | `/api/accounts/token/refresh/` | Refresh JWT access token |
+| GET/POST | `/api/accounts/organizations/` | List/create organizations for current user |
+| GET/POST | `/api/accounts/projects/` | List/create projects for current user |
 | GET/POST | `/api/documents/` | List / upload documents |
 | POST | `/api/documents/ingestion/warm/` | Queue ingestion worker warm-up |
 | POST | `/api/documents/<id>/ingest/` | Queue ingestion job (returns 202) |

@@ -5,7 +5,7 @@ from .models import IntentEvent, Lead
 
 @admin.register(Lead)
 class LeadAdmin(admin.ModelAdmin):
-    list_display = ["lead_id", "score", "last_intent", "last_seen_at"]
+    list_display = ["lead_id", "project", "score", "last_intent", "last_seen_at"]
     ordering = ["-score"]
 
 

@@ -9,6 +9,9 @@ Pure unit tests (intent classification, embedding mocks, agent, prompt builder)
 never touch the DB and always run.
 """
 import pytest
+from django.contrib.auth.models import User
+
+from apps.accounts.models import Membership, MembershipRole, Organization, Project
 
 from services import factory as svc_factory
 
@@ -68,6 +71,27 @@ def sample_document(db):
             "- 10+ units: 15% off"
         ),
     )
+
+
+@pytest.fixture
+def sample_user(db):
+    return User.objects.create_user(
+        username="owner@example.com",
+        email="owner@example.com",
+        password="testpass123",
+    )
+
+
+@pytest.fixture
+def sample_organization(db, sample_user):
+    org = Organization.objects.create(name="Acme Containers", owner=sample_user)
+    Membership.objects.create(user=sample_user, organization=org, role=MembershipRole.OWNER)
+    return org
+
+
+@pytest.fixture
+def sample_project(db, sample_organization):
+    return Project.objects.create(organization=sample_organization, name="Default Project")
 
 
 @pytest.fixture

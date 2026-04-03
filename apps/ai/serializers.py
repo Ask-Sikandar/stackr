@@ -29,6 +29,7 @@ class ConversationSerializer(serializers.ModelSerializer):
 
 
 class ChatRequestSerializer(serializers.Serializer):
+    project_id = serializers.IntegerField()
     lead_id = serializers.UUIDField()
     message = serializers.CharField(min_length=1, max_length=2000)
 

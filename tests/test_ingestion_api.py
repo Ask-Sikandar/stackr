@@ -9,8 +9,11 @@ from tests.conftest import requires_postgres
 
 @requires_postgres
 @pytest.mark.django_db
-def test_ingest_endpoint_enqueues_job_and_returns_202(sample_document):
+def test_ingest_endpoint_enqueues_job_and_returns_202(sample_document, sample_user, sample_project):
     client = APIClient()
+    client.force_authenticate(user=sample_user)
+    sample_document.project = sample_project
+    sample_document.save(update_fields=["project"])
 
     response = client.post(f"/api/documents/{sample_document.id}/ingest/", data={}, format="json")
 
@@ -28,9 +31,10 @@ def test_ingest_endpoint_enqueues_job_and_returns_202(sample_document):
 
 @requires_postgres
 @pytest.mark.django_db
-def test_ingest_endpoint_reuses_active_job():
+def test_ingest_endpoint_reuses_active_job(sample_user, sample_project):
     client = APIClient()
-    document = Document.objects.create(title="Doc", content="Hello world")
+    client.force_authenticate(user=sample_user)
+    document = Document.objects.create(title="Doc", content="Hello world", project=sample_project)
     existing_job = IngestionJob.objects.create(document=document, status=IngestionStatus.QUEUED)
 
     response = client.post(f"/api/documents/{document.id}/ingest/", data={}, format="json")
@@ -42,8 +46,9 @@ def test_ingest_endpoint_reuses_active_job():
 
 @requires_postgres
 @pytest.mark.django_db
-def test_ingest_endpoint_returns_404_for_missing_document():
+def test_ingest_endpoint_returns_404_for_missing_document(sample_user):
     client = APIClient()
+    client.force_authenticate(user=sample_user)
 
     response = client.post("/api/documents/999999/ingest/", data={}, format="json")
 
@@ -52,8 +57,11 @@ def test_ingest_endpoint_returns_404_for_missing_document():
 
 @requires_postgres
 @pytest.mark.django_db
-def test_ingestion_job_status_endpoint_returns_job(sample_document):
+def test_ingestion_job_status_endpoint_returns_job(sample_document, sample_user, sample_project):
     client = APIClient()
+    client.force_authenticate(user=sample_user)
+    sample_document.project = sample_project
+    sample_document.save(update_fields=["project"])
     job = IngestionJob.objects.create(document=sample_document, status=IngestionStatus.RUNNING)
 
     response = client.get(f"/api/documents/ingest-jobs/{job.job_id}/")
@@ -65,16 +73,20 @@ def test_ingestion_job_status_endpoint_returns_job(sample_document):
 
 @requires_postgres
 @pytest.mark.django_db
-def test_ingestion_job_status_endpoint_404_for_unknown_job():
+def test_ingestion_job_status_endpoint_404_for_unknown_job(sample_user):
     client = APIClient()
+    client.force_authenticate(user=sample_user)
 
     response = client.get(f"/api/documents/ingest-jobs/{uuid.uuid4()}/")
 
     assert response.status_code == 404
 
 
-def test_ingestion_warm_endpoint_returns_202():
+@requires_postgres
+@pytest.mark.django_db
+def test_ingestion_warm_endpoint_returns_202(sample_user):
     client = APIClient()
+    client.force_authenticate(user=sample_user)
 
     response = client.post("/api/documents/ingestion/warm/", data={}, format="json")
 

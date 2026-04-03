@@ -1,19 +1,23 @@
 from django.db import transaction
 from rest_framework import status
+from rest_framework.exceptions import ValidationError
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.accounts.access import get_project_for_user
 from apps.leads.models import IntentEvent, Lead
 from services.factory import get_agent
-from services.interfaces.intent_classifier import INTENT_SCORES, Intent
+from services.interfaces.intent_classifier import Intent
 
 from .models import Conversation, Message, MessageRole
 from .serializers import ChatRequestSerializer, ConversationSerializer
 
 
-def _get_or_create_lead(lead_id) -> Lead:
-    lead, _ = Lead.objects.get_or_create(lead_id=lead_id)
+def _get_or_create_lead(lead_id, project) -> Lead:
+    lead, created = Lead.objects.get_or_create(lead_id=lead_id, defaults={"project": project})
+    if not created and lead.project_id != project.id:
+        raise PermissionError("Lead belongs to a different project.")
     return lead
 
 
@@ -54,14 +58,16 @@ class ChatView(APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         lead_id = serializer.validated_data["lead_id"]
+        project_id = serializer.validated_data["project_id"]
         user_message = serializer.validated_data["message"]
 
         try:
+            project = get_project_for_user(request.user, project_id)
             agent = get_agent()
             agent_response = agent.handle_message(user_message)
 
             with transaction.atomic():
-                lead = _get_or_create_lead(lead_id)
+                lead = _get_or_create_lead(lead_id, project)
                 conv = _get_or_create_conversation(lead)
 
                 # Save user turn
@@ -85,11 +91,14 @@ class ChatView(APIView):
             return Response(
                 {
                     **agent_response.to_dict(),
+                    "project_id": project.id,
                     "lead_score": lead.score,
                 },
                 status=status.HTTP_200_OK,
             )
 
+        except PermissionError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_403_FORBIDDEN)
         except Exception as exc:
             return Response(
                 {"error": "Assistant unavailable. Please try again.", "detail": str(exc)},
@@ -101,11 +110,19 @@ class ChatHistoryView(APIView):
     """GET /api/ai/chat/history/<lead_id>/ — full conversation history for a lead"""
 
     def get(self, request: Request, lead_id) -> Response:
+        project_id = request.query_params.get("project_id")
+        if project_id is None:
+            raise ValidationError({"project_id": "This query parameter is required."})
+
         try:
-            lead = Lead.objects.get(lead_id=lead_id)
+            project = get_project_for_user(request.user, int(project_id))
+        except ValueError as exc:
+            raise ValidationError({"project_id": "Invalid project id."}) from exc
+        try:
+            lead = Lead.objects.get(lead_id=lead_id, project=project)
         except Lead.DoesNotExist:
             return Response({"error": "Lead not found."}, status=status.HTTP_404_NOT_FOUND)
 
         conversations = lead.conversations.prefetch_related("messages").all()
         serializer = ConversationSerializer(conversations, many=True)
-        return Response({"lead_id": str(lead_id), "conversations": serializer.data})
+        return Response({"lead_id": str(lead_id), "project_id": project.id, "conversations": serializer.data})
