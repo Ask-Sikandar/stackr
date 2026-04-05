@@ -2,6 +2,32 @@
 
 Key architectural decisions, trade-offs, AI-assisted choices, and where I overrode the AI.
 
+## Reviewer Quick Scan (10 bullets)
+
+- Kept embeddings local with `all-MiniLM-L6-v2` (384-dim) for speed, cost control, and offline development.
+- Chose pgvector over a separate vector DB to keep vectors + metadata transactional in one Postgres stack.
+- Implemented semantic chunking (paragraph/table/list aware) with bounded overlap for better retrieval recall at boundaries.
+- Used Ollama `llama3.2:3b` as default runtime, but built provider routing (OpenAI/Gemini supported) for production flexibility.
+- Kept intent classification deterministic (keyword-based) for sub-ms latency and fully testable behavior.
+- Added weighted lead scoring (`general=1`, `availability=5`, `pricing=10`, `conversion=25`) to prioritize sales follow-up.
+- Enforced interface-driven service architecture (`SERVICE_CLASSES` + factory) to keep the pipeline swappable and test-friendly.
+- Added async ingestion jobs with lifecycle status, retries, and worker warmup to remove upload-time blocking.
+- Added WebSocket token streaming + typing indicators to improve perceived responsiveness.
+- Added evaluation tooling and UX upgrades (lead dashboard, CTA card, guided auth/prerequisite flow, LLM-generated welcome message).
+
+## Representative AI Prompts Used
+
+These are representative prompts/tasks I used while iterating with AI during implementation and refinements.
+
+- "Build a semantic chunker for markdown docs that keeps tables atomic and avoids splitting rows."
+- "Implement a retrieval pipeline with pgvector cosine search and source-attributed results."
+- "Create a structured AgentHandler response with sources, components, lead score delta, and conversion handoff."
+- "Add WebSocket streaming with typing indicators and a resilient frontend message state."
+- "Enforce tenant isolation across organizations/projects in documents, retrieval, chat, and lead history."
+- "Add async ingestion jobs with queue/running/succeeded/failed status and polling from the admin page."
+- "If no auth token exists, redirect users to login and block access to protected pages."
+- "Generate the chat welcome message from uploaded docs with strict length limits and safe fallback behavior."
+
 ---
 
 ## 1. Embedding Model: all-MiniLM-L6-v2
