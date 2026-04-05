@@ -6,16 +6,23 @@ import { useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/api";
 import {
   clearAuthSession,
-  getAccessToken,
   getOrganizationId,
   getProjectId,
   setOrganizationId,
   setProjectId,
 } from "@/lib/session";
-import type { Organization, Project } from "@/types";
+import { useAuthGuard } from "@/hooks/useAuthGuard";
+import type { Document, Organization, Project } from "@/types";
+
+type DocList = Document[] | { results: Document[] };
+
+function normalizeDocs(payload: DocList): Document[] {
+  return Array.isArray(payload) ? payload : payload.results ?? [];
+}
 
 export default function PortalPage() {
   const router = useRouter();
+  const { isCheckingAuth, isAuthenticated } = useAuthGuard();
 
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -26,6 +33,7 @@ export default function PortalPage() {
   const [loading, setLoading] = useState(true);
   const [savingOrg, setSavingOrg] = useState(false);
   const [savingProject, setSavingProject] = useState(false);
+  const [checkingChatAccess, setCheckingChatAccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const loadOrganizations = useCallback(async () => {
@@ -60,10 +68,7 @@ export default function PortalPage() {
   }, []);
 
   useEffect(() => {
-    if (!getAccessToken()) {
-      router.replace("/login");
-      return;
-    }
+    if (isCheckingAuth || !isAuthenticated) return;
 
     (async () => {
       setLoading(true);
@@ -76,7 +81,7 @@ export default function PortalPage() {
         setLoading(false);
       }
     })();
-  }, [loadOrganizations, router]);
+  }, [isAuthenticated, isCheckingAuth, loadOrganizations]);
 
   useEffect(() => {
     if (!selectedOrgId) return;
@@ -132,6 +137,7 @@ export default function PortalPage() {
           custom_instructions: "",
         }),
       });
+
       setProjects((prev) => [project, ...prev]);
       setSelectedProjectId(project.id);
       setProjectId(project.id);
@@ -148,7 +154,36 @@ export default function PortalPage() {
     router.push("/login");
   };
 
-  if (loading) {
+  const handleOpenChat = async () => {
+    if (!selectedProjectId) {
+      setError("Create or select a project before opening chat.");
+      return;
+    }
+
+    setCheckingChatAccess(true);
+    setError(null);
+
+    try {
+      const docs = await apiFetch<DocList>("/api/documents/");
+      const hasIngestedDoc = normalizeDocs(docs).some(
+        (doc) => doc.project_id === selectedProjectId && doc.processed,
+      );
+
+      if (!hasIngestedDoc) {
+        setError("Ingest at least one document for this project before opening chat.");
+        router.push("/admin/documents");
+        return;
+      }
+
+      router.push("/chat");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to verify chat prerequisites");
+    } finally {
+      setCheckingChatAccess(false);
+    }
+  };
+
+  if (isCheckingAuth || !isAuthenticated || loading) {
     return <main className="min-h-screen bg-slate-50 p-8 text-slate-500">Loading portal...</main>;
   }
 
@@ -259,9 +294,13 @@ export default function PortalPage() {
           <h2 className="text-lg font-semibold text-slate-900">Workspace</h2>
           <p className="mt-1 text-sm text-slate-500">Choose where to continue once a project is selected.</p>
           <div className="mt-4 flex flex-wrap gap-3">
-            <a href="/chat" className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">
-              Open Chat
-            </a>
+            <button
+              onClick={handleOpenChat}
+              disabled={checkingChatAccess}
+              className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-500"
+            >
+              {checkingChatAccess ? "Checking prerequisites..." : "Open Chat"}
+            </button>
             <a href="/admin/documents" className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">
               Documents
             </a>

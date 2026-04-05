@@ -11,7 +11,11 @@ interface ChatWidgetProps {
   wsUrl: string;
   projectId?: number;
   accessToken?: string;
+  introMessage?: string;
+  assistantName?: string;
 }
+
+const DEFAULT_ASSISTANT_NAME = "ContainerBot";
 
 function TypingIndicator() {
   return (
@@ -40,13 +44,25 @@ function ConnectionBanner({ isConnecting }: { isConnecting: boolean }) {
   );
 }
 
-export function ChatWidget({ leadId, apiUrl: _apiUrl, wsUrl, projectId, accessToken }: ChatWidgetProps) {
+export function ChatWidget({
+  leadId,
+  apiUrl: _apiUrl,
+  wsUrl,
+  projectId,
+  accessToken,
+  introMessage,
+  assistantName,
+}: ChatWidgetProps) {
+  const normalizedAssistantName = assistantName?.trim() || DEFAULT_ASSISTANT_NAME;
+  const normalizedIntroMessage =
+    introMessage?.trim() ||
+    `Hi! I'm ${normalizedAssistantName}. I can help you find the right shipping container, get pricing, check delivery to your location, and answer any questions. What can I help you with?`;
+
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: "welcome",
       role: "assistant",
-      content:
-        "Hi! I'm ContainerBot. I can help you find the right shipping container, get pricing, check delivery to your location, and answer any questions. What can I help you with?",
+      content: normalizedIntroMessage,
     },
   ]);
   const [input, setInput] = useState("");
@@ -168,7 +184,7 @@ export function ChatWidget({ leadId, apiUrl: _apiUrl, wsUrl, projectId, accessTo
           CB
         </div>
         <div>
-          <p className="text-sm font-semibold text-white">ContainerBot</p>
+          <p className="text-sm font-semibold text-white">{normalizedAssistantName}</p>
           <p className="text-xs text-blue-200">Pacific Container Co. Sales Assistant</p>
         </div>
         <div className={`ml-auto h-2 w-2 rounded-full ${isConnected ? "bg-green-400" : "bg-yellow-400"}`} />

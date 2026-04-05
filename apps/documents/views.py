@@ -8,10 +8,71 @@ from django.db import transaction
 from django.conf import settings
 
 from apps.accounts.access import get_project_for_user
+from services.factory import get_llm_client_for_project
 from services.metering import record_usage_event
 from .models import Chunk, Document, IngestionJob, IngestionStatus
 from .serializers import ChunkSerializer, DocumentListSerializer, DocumentSerializer, IngestionJobSerializer
 from .tasks import run_ingestion_job, warm_ingestion_worker
+
+
+WELCOME_MESSAGE_DEFAULT_MAX_LENGTH = 280
+WELCOME_MESSAGE_MIN_LENGTH = 120
+WELCOME_MESSAGE_MAX_ALLOWED = 400
+WELCOME_MESSAGE_DOCUMENT_LIMIT = 4
+WELCOME_MESSAGE_EXCERPT_LIMIT = 1200
+
+
+def _coerce_welcome_max_length(raw_value) -> int:
+    if raw_value is None:
+        return WELCOME_MESSAGE_DEFAULT_MAX_LENGTH
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError):
+        return WELCOME_MESSAGE_DEFAULT_MAX_LENGTH
+    return max(WELCOME_MESSAGE_MIN_LENGTH, min(parsed, WELCOME_MESSAGE_MAX_ALLOWED))
+
+
+def _truncate_sentence(text: str, max_length: int) -> str:
+    cleaned = " ".join((text or "").split())
+    if len(cleaned) <= max_length:
+        return cleaned
+
+    cropped = cleaned[: max_length + 1]
+    if " " in cropped:
+        cropped = cropped.rsplit(" ", 1)[0]
+    cropped = cropped.rstrip(" ,.;:-")
+    if not cropped:
+        return ""
+    return f"{cropped}."
+
+
+def _fallback_welcome_message(source_documents: list[Document], max_length: int) -> str:
+    titles = [doc.title.strip() for doc in source_documents if (doc.title or "").strip()]
+    topic_fragment = ", ".join(titles[:2]) if titles else "your uploaded documents"
+
+    fallback = (
+        f"Hi! I can help answer questions based on {topic_fragment}. "
+        "I can guide you on details, policies, pricing, and comparisons from your uploaded knowledge. "
+        "What would you like to explore first?"
+    )
+    return _truncate_sentence(fallback, max_length)
+
+
+def _normalize_welcome_message(raw: str, max_length: int, source_documents: list[Document]) -> str:
+    cleaned = " ".join((raw or "").replace("\n", " ").split()).strip(" \t\n\r\"'`")
+    if not cleaned:
+        return _fallback_welcome_message(source_documents, max_length)
+
+    if not cleaned.lower().startswith(("hi", "hello", "welcome")):
+        cleaned = f"Hi! {cleaned[0].upper()}{cleaned[1:] if len(cleaned) > 1 else ''}"
+
+    if "?" not in cleaned:
+        cleaned = f"{cleaned.rstrip('. ')} What would you like to ask first?"
+
+    normalized = _truncate_sentence(cleaned, max_length)
+    if len(normalized) < 40:
+        return _fallback_welcome_message(source_documents, max_length)
+    return normalized
 
 
 class DocumentListCreateView(ListCreateAPIView):
@@ -162,3 +223,93 @@ class IngestionWarmView(APIView):
             )
 
         return Response({"status": "queued", "task_id": str(result.id)}, status=status.HTTP_202_ACCEPTED)
+
+
+class GenerateWelcomeMessageView(APIView):
+    """POST /api/documents/welcome-message/generate/ — create project welcome text from uploaded docs."""
+
+    def post(self, request: Request) -> Response:
+        project_id = request.data.get("project_id")
+        if project_id is None:
+            raise ValidationError({"project_id": "This field is required."})
+
+        try:
+            project = get_project_for_user(request.user, int(project_id))
+        except ValueError as exc:
+            raise ValidationError({"project_id": "Invalid project id."}) from exc
+
+        max_length = _coerce_welcome_max_length(request.data.get("max_length"))
+
+        processed_documents = list(
+            Document.objects.filter(project=project, processed=True)
+            .order_by("-uploaded_at")[:WELCOME_MESSAGE_DOCUMENT_LIMIT]
+        )
+        source_documents = processed_documents
+        used_processed_documents = True
+
+        if not source_documents:
+            source_documents = list(
+                Document.objects.filter(project=project)
+                .order_by("-uploaded_at")[:WELCOME_MESSAGE_DOCUMENT_LIMIT]
+            )
+            used_processed_documents = False
+
+        if not source_documents:
+            return Response(
+                {"error": "Upload at least one document before generating a welcome message."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        doc_summaries: list[str] = []
+        for doc in source_documents:
+            title = (doc.title or "").strip() or "Untitled"
+            excerpt = (doc.content or "").strip()[:WELCOME_MESSAGE_EXCERPT_LIMIT]
+            doc_summaries.append(f"- {title}: {excerpt}")
+
+        prompt = (
+            "Write a sensible welcome message for a B2B sales assistant chat interface.\n"
+            f"Output length must be <= {max_length} characters.\n"
+            "Requirements:\n"
+            "- 2 to 3 concise sentences\n"
+            "- Sound professional, friendly, and confident\n"
+            "- Mention that the assistant can answer based on uploaded project documents\n"
+            "- Include examples of topics inferred from the provided documents\n"
+            "- End with one clear question inviting the user to ask\n"
+            "- No markdown, no bullets, no quotes, no fake claims\n\n"
+            "Project documents:\n"
+            f"{'\n'.join(doc_summaries)}"
+        )
+
+        generated_with_fallback = False
+        try:
+            llm_client = get_llm_client_for_project(project)
+            raw_message = llm_client.complete(prompt)
+        except Exception:
+            raw_message = ""
+            generated_with_fallback = True
+
+        message = _normalize_welcome_message(raw_message, max_length, source_documents)
+
+        record_usage_event(
+            event_type="welcome_message.generated",
+            organization_id=project.organization_id,
+            project_id=project.id,
+            quantity=1,
+            metadata={
+                "max_length": max_length,
+                "source_document_count": len(source_documents),
+                "used_processed_documents": used_processed_documents,
+                "generated_with_fallback": generated_with_fallback,
+                "output_length": len(message),
+            },
+        )
+
+        return Response(
+            {
+                "message": message,
+                "max_length": max_length,
+                "source_document_count": len(source_documents),
+                "used_processed_documents": used_processed_documents,
+                "generated_with_fallback": generated_with_fallback,
+            }
+        )

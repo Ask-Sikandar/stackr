@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { Lead } from "@/types";
 import { LeadDashboard } from "@/components/admin/LeadDashboard";
 import { apiFetch } from "@/lib/api";
-import { getAccessToken, getProjectId } from "@/lib/session";
+import { useAuthGuard } from "@/hooks/useAuthGuard";
+import { getProjectId } from "@/lib/session";
 
 type LeadList = Lead[] | { results: Lead[] };
 
@@ -13,18 +15,20 @@ function normalizeLeads(payload: LeadList): Lead[] {
 }
 
 export default function LeadsAdminPage() {
+  const router = useRouter();
+  const { isCheckingAuth, isAuthenticated } = useAuthGuard();
   const [leads, setLeads] = useState<Lead[]>([]);
   const [projectId, setProjectId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (isCheckingAuth || !isAuthenticated) return;
+
     (async () => {
-      const token = getAccessToken();
       const selectedProject = getProjectId();
-      if (!token || !selectedProject) {
-        setError("Select a project from /portal and log in first.");
-        setLoading(false);
+      if (!selectedProject) {
+        router.replace("/portal");
         return;
       }
 
@@ -51,7 +55,11 @@ export default function LeadsAdminPage() {
         setLoading(false);
       }
     })();
-  }, []);
+  }, [isAuthenticated, isCheckingAuth, router]);
+
+  if (isCheckingAuth || !isAuthenticated) {
+    return <main className="min-h-screen bg-slate-50 p-8 text-slate-500">Checking access...</main>;
+  }
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-8">

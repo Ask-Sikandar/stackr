@@ -92,3 +92,84 @@ def test_ingestion_warm_endpoint_returns_202(sample_user):
 
     assert response.status_code == 202
     assert response.data["status"] == "queued"
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_generate_welcome_message_returns_length_limited_message(sample_user, sample_project, monkeypatch):
+    client = APIClient()
+    client.force_authenticate(user=sample_user)
+
+    Document.objects.create(
+        title="Pricing Sheet",
+        content="40ft container pricing, discounts, and payment terms.",
+        project=sample_project,
+        processed=True,
+    )
+
+    class FakeLLM:
+        def complete(self, prompt: str) -> str:
+            return (
+                "Hello and welcome to your assistant. "
+                "I can help with pricing, discounts, delivery timelines, and policy questions from your documents. "
+                "Ask me anything about product options, costs, and next steps for your purchase today."
+            )
+
+    monkeypatch.setattr("apps.documents.views.get_llm_client_for_project", lambda project: FakeLLM())
+
+    response = client.post(
+        "/api/documents/welcome-message/generate/",
+        data={"project_id": sample_project.id, "max_length": 160},
+        format="json",
+    )
+
+    assert response.status_code == 200
+    assert response.data["message"]
+    assert len(response.data["message"]) <= 160
+    assert response.data["source_document_count"] == 1
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_generate_welcome_message_requires_document(sample_user, sample_project):
+    client = APIClient()
+    client.force_authenticate(user=sample_user)
+
+    response = client.post(
+        "/api/documents/welcome-message/generate/",
+        data={"project_id": sample_project.id},
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert "Upload at least one document" in response.data["error"]
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_generate_welcome_message_falls_back_if_llm_fails(sample_user, sample_project, monkeypatch):
+    client = APIClient()
+    client.force_authenticate(user=sample_user)
+
+    Document.objects.create(
+        title="Delivery Policy",
+        content="Delivery windows, regions, and lead times.",
+        project=sample_project,
+        processed=True,
+    )
+
+    def _raise(_project):
+        raise RuntimeError("LLM unavailable")
+
+    monkeypatch.setattr("apps.documents.views.get_llm_client_for_project", _raise)
+
+    response = client.post(
+        "/api/documents/welcome-message/generate/",
+        data={"project_id": sample_project.id, "max_length": 180},
+        format="json",
+    )
+
+    assert response.status_code == 200
+    assert response.data["generated_with_fallback"] is True
+    assert response.data["message"]
+    assert len(response.data["message"]) <= 180

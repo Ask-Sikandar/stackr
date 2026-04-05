@@ -30,29 +30,29 @@ Key architectural decisions, trade-offs, AI-assisted choices, and where I overro
 
 ---
 
-## 3. Chunking Strategy: Paragraph-first, not fixed-size
+## 3. Chunking Strategy: Paragraph-first with bounded overlap
 
-**Chosen:** Paragraph-aware chunking (split on `\n\n`, then sentence boundaries, tables atomic)
+**Chosen:** Paragraph-aware chunking (split on `\n\n`, then sentence boundaries, tables/lists atomic) with 50-char forward overlap between adjacent chunks.
 
-**Rejected:** Fixed 500-char splits, sliding window, sentence-only
+**Rejected:** Fixed 500-char-only splitting, sentence-only splitting, and large overlapping windows.
 
 **Why:** Container spec documents are table-heavy and section-structured. A fixed character split cuts mid-table-row ("40ft | $3,85" on one chunk, "0" on the next), which destroys meaning for both retrieval and the LLM. Splitting by paragraph boundaries first preserves semantic units — each paragraph is a coherent thought. Tables are kept as a single atomic chunk so pricing comparisons stay intact.
 
 **Chunk size rationale:** 500 chars ≈ 80–100 tokens, fits well within the MiniLM model's 256-token window while providing enough context per chunk.
 
-**Where I overrode AI:** Claude suggested a simpler fixed-size splitter with overlap. I rewrote the chunker with table and list detection after manually inspecting what fixed splits produced on the pricing_sheet.md document.
+**Where I overrode AI:** Claude suggested a simpler fixed-size splitter. I rewrote the chunker with table and list detection after manually inspecting what fixed splits produced on the pricing_sheet.md document, then added a small overlap after measuring better boundary recall.
 
 ---
 
-## 4. LLM: Ollama llama3.2:3b (local)
+## 4. LLM Runtime: Ollama default + provider fallback routing
 
-**Chosen:** Ollama with `llama3.2:3b` for local inference
+**Chosen:** Ollama with `llama3.2:3b` as the default runtime, plus a provider-routed architecture that supports OpenAI and Gemini with fallback.
 
-**Rejected:** OpenAI GPT-4o-mini, Claude claude-haiku-4-5 API
+**Rejected:** Hard-coding the platform to one provider with no fallback path.
 
-**Why:** No API key required, fully offline, fits in 4GB RAM. For a POC demo this is the right trade-off. The 3B model is sufficient for extractive Q&A from retrieved context — it doesn't need to reason deeply, just paraphrase and cite.
+**Why:** Ollama keeps local development fully offline and no-key, while provider routing keeps the codebase production-ready. Projects can prefer providers per client context, organizations can use private provider keys, and platform fallback avoids hard downtime when a provider fails.
 
-**In production I'd use:** GPT-4o-mini or Claude claude-haiku-4-5 for better instruction following and more reliable source citation.
+**In production I'd use:** Keep provider routing as implemented, and tune per client for cost/quality/SLA (for example GPT-4o-mini or Claude haiku-class models for stronger instruction following and citation reliability).
 
 ---
 
@@ -112,13 +112,18 @@ This means:
 - **Lead Intelligence Dashboard** (`/admin/leads`) — shows lead scores, intent timelines, and message counts. Sales teams need to know who to call next. This is "obviously better" without being asked.
 - **Inline quote request form** (CTACard) — when a prospect says "I want to buy", the chat widget renders an inline form to capture name + email. No page redirect, no friction.
 - **Answer quality eval script** (`eval/eval_quality.py`) — 10 golden Q&A pairs, semantic similarity scoring, intent accuracy. Tests answer quality, not just HTTP 200.
+- **Business-ready production architecture plan** — implemented a clear path from demo to SaaS: organization/project tenancy boundaries, project-scoped retrieval isolation, project/org provider routing with private keys and platform fallback, and usage metering events for governance and billing.
+- **Client-safe workspace separation** — data and behavior are scoped per project so multiple clients can share one platform without cross-project leakage in retrieval, chat behavior, or reporting.
+- **Easy document ingestion flow** — implemented asynchronous ingestion jobs with lifecycle status (`queued/running/succeeded/failed`), retries, warm-worker optimization, and UI status polling so users can upload documents and keep working while indexing completes.
+- **Guided chat readiness UX** — added prerequisite checks and auth guards so users are guided into the right flow (select project -> ingest docs -> open chat) instead of encountering runtime failures.
+- **LLM-generated onboarding copy** — added a welcome-message generation endpoint based on uploaded documents, with strict length caps and fallback normalization so each project gets sensible, domain-aware first-contact messaging.
 
 ---
 
 ## 10. What I'd Do With More Time
 
 - **Re-ranking:** Add a cross-encoder (e.g., `cross-encoder/ms-marco-MiniLM-L-6-v2`) on top of vector retrieval to improve chunk selection quality.
-- **Async ingestion:** Move `ingest_document()` into a Celery task so large document uploads don't block the HTTP request.
+- **Ingestion throughput scaling:** Add queue prioritization and autoscaled worker pools (for example separate queues for small vs large documents) to improve ingest latency at higher tenant volumes.
 - **Lead authentication:** Currently `lead_id` is a UUID passed from the client — trivially spoofable. Production needs a proper session + HMAC verification.
 - **HyDE (Hypothetical Document Embeddings):** Generate a hypothetical answer, embed it, then retrieve — often outperforms query embedding for complex questions.
 - **Webhook on conversion:** Fire a webhook to a CRM (HubSpot, Salesforce) when `handoff_triggered=True` so the sales team gets a real-time notification.

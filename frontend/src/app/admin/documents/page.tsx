@@ -4,13 +4,24 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Document, IngestionJob } from "@/types";
 import { DocumentTable } from "@/components/admin/DocumentTable";
 import { apiFetch } from "@/lib/api";
-import { getAccessToken, getProjectId } from "@/lib/session";
+import { useAuthGuard } from "@/hooks/useAuthGuard";
+import { getProjectUxConfig, saveProjectUxConfig } from "@/lib/projectUxConfig";
+import { getProjectId } from "@/lib/session";
 
 type DocList = Document[] | { results: Document[] };
 type IngestionStatus = IngestionJob["status"];
 
+interface WelcomeMessageGenerateResponse {
+  message: string;
+  max_length: number;
+  source_document_count: number;
+  used_processed_documents: boolean;
+  generated_with_fallback: boolean;
+}
+
 const IN_PROGRESS_STATUSES: IngestionStatus[] = ["queued", "running"];
 const IN_PROGRESS_POLL_INTERVAL_MS = 1500;
+const WELCOME_MESSAGE_MAX_LENGTH = 280;
 
 function normalizeDocs(payload: DocList): Document[] {
   return Array.isArray(payload) ? payload : payload.results ?? [];
@@ -21,6 +32,7 @@ function isInProgressStatus(status: IngestionStatus): boolean {
 }
 
 export default function DocumentsAdminPage() {
+  const { isCheckingAuth, isAuthenticated } = useAuthGuard();
   const [documents, setDocuments] = useState<Document[]>([]);
   const [projectId, setProjectId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -30,6 +42,10 @@ export default function DocumentsAdminPage() {
   const [uploading, setUploading] = useState(false);
   const [ingestingByDocumentId, setIngestingByDocumentId] = useState<Record<number, boolean>>({});
   const [ingestionJobsByDocumentId, setIngestionJobsByDocumentId] = useState<Record<number, IngestionJob>>({});
+  const [welcomeMessage, setWelcomeMessage] = useState("");
+  const [welcomeStatus, setWelcomeStatus] = useState<string | null>(null);
+  const [welcomeError, setWelcomeError] = useState<string | null>(null);
+  const [generatingWelcome, setGeneratingWelcome] = useState(false);
 
   const mountedRef = useRef(true);
   const pollTimersRef = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
@@ -51,9 +67,8 @@ export default function DocumentsAdminPage() {
 
   const fetchDocuments = useCallback(async () => {
     const selectedProject = getProjectId();
-    const token = getAccessToken();
-    if (!selectedProject || !token) {
-      setError("Select a project from /portal and log in first.");
+    if (!selectedProject) {
+      setError("Select a project from /portal first.");
       setDocuments([]);
       setLoading(false);
       return;
@@ -110,8 +125,11 @@ export default function DocumentsAdminPage() {
   );
 
   useEffect(() => {
+    if (isCheckingAuth || !isAuthenticated) return;
+
     mountedRef.current = true;
     fetchDocuments();
+
     return () => {
       mountedRef.current = false;
       Object.keys(pollTimersRef.current).forEach((key) => {
@@ -119,7 +137,15 @@ export default function DocumentsAdminPage() {
         clearPollTimer(documentId);
       });
     };
-  }, [fetchDocuments]);
+  }, [clearPollTimer, fetchDocuments, isAuthenticated, isCheckingAuth]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    const existingConfig = getProjectUxConfig(projectId);
+    setWelcomeMessage(existingConfig?.introMessage ?? "");
+    setWelcomeStatus(null);
+    setWelcomeError(null);
+  }, [projectId]);
 
   const handleIngest = async (id: number) => {
     setError(null);
@@ -178,6 +204,86 @@ export default function DocumentsAdminPage() {
     [ingestionJobsByDocumentId],
   );
 
+  const handleAutoGenerateWelcome = async () => {
+    if (!projectId) {
+      setWelcomeError("Select a project in portal first.");
+      setWelcomeStatus(null);
+      return;
+    }
+
+    if (documents.length === 0) {
+      setWelcomeError("Upload at least one document before generating a welcome message.");
+      setWelcomeStatus(null);
+      return;
+    }
+
+    setGeneratingWelcome(true);
+    setWelcomeError(null);
+    setWelcomeStatus(null);
+
+    try {
+      const response = await apiFetch<WelcomeMessageGenerateResponse>(
+        "/api/documents/welcome-message/generate/",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            project_id: projectId,
+            max_length: WELCOME_MESSAGE_MAX_LENGTH,
+          }),
+        },
+      );
+
+      setWelcomeMessage(response.message);
+
+      const sourceTypeLabel = response.used_processed_documents ? "processed" : "uploaded";
+      if (response.generated_with_fallback) {
+        setWelcomeStatus("Generated using fallback copy. You can edit and save it.");
+      } else {
+        setWelcomeStatus(
+          `Generated from ${response.source_document_count} ${sourceTypeLabel} document${response.source_document_count > 1 ? "s" : ""}. Review and save.`,
+        );
+      }
+    } catch (err) {
+      setWelcomeError(err instanceof Error ? err.message : "Failed to generate welcome message.");
+    } finally {
+      setGeneratingWelcome(false);
+    }
+  };
+
+  const handleSaveWelcomeMessage = () => {
+    if (!projectId) {
+      setWelcomeError("Select a project in portal first.");
+      setWelcomeStatus(null);
+      return;
+    }
+
+    const trimmed = welcomeMessage.trim();
+    if (!trimmed) {
+      setWelcomeError("Welcome message cannot be empty.");
+      setWelcomeStatus(null);
+      return;
+    }
+
+    if (trimmed.length > WELCOME_MESSAGE_MAX_LENGTH) {
+      setWelcomeError(`Welcome message must be ${WELCOME_MESSAGE_MAX_LENGTH} characters or fewer.`);
+      setWelcomeStatus(null);
+      return;
+    }
+
+    const existingConfig = getProjectUxConfig(projectId);
+    saveProjectUxConfig(projectId, {
+      introMessage: trimmed,
+      assistantDisplayName: existingConfig?.assistantDisplayName,
+    });
+
+    setWelcomeError(null);
+    setWelcomeStatus("Saved. This message will be used as the first chat message for this project.");
+  };
+
+  if (isCheckingAuth || !isAuthenticated) {
+    return <main className="min-h-screen bg-slate-50 p-8 text-slate-500">Checking access...</main>;
+  }
+
   return (
     <div className="mx-auto max-w-5xl px-4 py-8">
       <div className="mb-6 flex items-center justify-between">
@@ -213,6 +319,41 @@ export default function DocumentsAdminPage() {
           >
             {uploading ? "Uploading..." : "Upload"}
           </button>
+        </div>
+      </div>
+
+      <div className="mb-6 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+        <h2 className="text-sm font-semibold text-gray-900">Chat Welcome Message</h2>
+        <p className="mt-1 text-xs text-gray-500">
+          Keep project creation minimal. Configure or auto-generate the welcome message here from project docs.
+        </p>
+        <div className="mt-3 space-y-2">
+          <textarea
+            value={welcomeMessage}
+            onChange={(e) => setWelcomeMessage(e.target.value)}
+            placeholder="Generate a welcome message from documents or write one manually"
+            maxLength={WELCOME_MESSAGE_MAX_LENGTH}
+            className="h-24 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+          />
+          <p className="text-xs text-gray-500">{welcomeMessage.trim().length}/{WELCOME_MESSAGE_MAX_LENGTH} characters</p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={handleAutoGenerateWelcome}
+              disabled={!projectId || documents.length === 0 || generatingWelcome}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {generatingWelcome ? "Generating..." : "Auto-generate from documents"}
+            </button>
+            <button
+              onClick={handleSaveWelcomeMessage}
+              disabled={!projectId || generatingWelcome}
+              className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Save welcome message
+            </button>
+          </div>
+          {welcomeStatus && <p className="text-xs text-emerald-700">{welcomeStatus}</p>}
+          {welcomeError && <p className="text-xs text-red-600">{welcomeError}</p>}
         </div>
       </div>
 
