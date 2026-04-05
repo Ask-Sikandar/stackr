@@ -77,6 +77,21 @@ export interface Chunk {
   metadata: Record<string, unknown>;
 }
 
+export type IngestionJobStatus = "queued" | "running" | "succeeded" | "failed";
+
+export interface IngestionJob {
+  job_id: string;
+  document_id: number;
+  project_id: number;
+  status: IngestionJobStatus;
+  task_id: string;
+  retries: number;
+  error_message: string;
+  queued_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Account / Tenant types
 // ---------------------------------------------------------------------------

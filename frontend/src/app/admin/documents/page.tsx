@@ -1,15 +1,23 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import type { Document } from "@/types";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Document, IngestionJob } from "@/types";
 import { DocumentTable } from "@/components/admin/DocumentTable";
 import { apiFetch } from "@/lib/api";
 import { getAccessToken, getProjectId } from "@/lib/session";
 
 type DocList = Document[] | { results: Document[] };
+type IngestionStatus = IngestionJob["status"];
+
+const IN_PROGRESS_STATUSES: IngestionStatus[] = ["queued", "running"];
+const IN_PROGRESS_POLL_INTERVAL_MS = 1500;
 
 function normalizeDocs(payload: DocList): Document[] {
   return Array.isArray(payload) ? payload : payload.results ?? [];
+}
+
+function isInProgressStatus(status: IngestionStatus): boolean {
+  return IN_PROGRESS_STATUSES.includes(status);
 }
 
 export default function DocumentsAdminPage() {
@@ -20,6 +28,26 @@ export default function DocumentsAdminPage() {
   const [uploadTitle, setUploadTitle] = useState("");
   const [uploadContent, setUploadContent] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [ingestingByDocumentId, setIngestingByDocumentId] = useState<Record<number, boolean>>({});
+  const [ingestionJobsByDocumentId, setIngestionJobsByDocumentId] = useState<Record<number, IngestionJob>>({});
+
+  const mountedRef = useRef(true);
+  const pollTimersRef = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
+
+  const clearPollTimer = useCallback((documentId: number) => {
+    const existingTimer = pollTimersRef.current[documentId];
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+      delete pollTimersRef.current[documentId];
+    }
+  }, []);
+
+  const trackIngestionJob = useCallback((job: IngestionJob) => {
+    setIngestionJobsByDocumentId((prev) => ({
+      ...prev,
+      [job.document_id]: job,
+    }));
+  }, []);
 
   const fetchDocuments = useCallback(async () => {
     const selectedProject = getProjectId();
@@ -44,13 +72,80 @@ export default function DocumentsAdminPage() {
     }
   }, []);
 
+  const pollIngestionJob = useCallback(
+    async (documentId: number, jobId: string) => {
+      if (!mountedRef.current) return;
+
+      try {
+        const job = await apiFetch<IngestionJob>(`/api/documents/ingest-jobs/${jobId}/`);
+        if (!mountedRef.current) return;
+
+        trackIngestionJob(job);
+
+        if (isInProgressStatus(job.status)) {
+          clearPollTimer(documentId);
+          pollTimersRef.current[documentId] = setTimeout(() => {
+            void pollIngestionJob(documentId, jobId);
+          }, IN_PROGRESS_POLL_INTERVAL_MS);
+          return;
+        }
+
+        clearPollTimer(documentId);
+
+        if (job.status === "succeeded") {
+          setIngestionJobsByDocumentId((prev) => {
+            const next = { ...prev };
+            delete next[documentId];
+            return next;
+          });
+          await fetchDocuments();
+        }
+      } catch (err) {
+        if (mountedRef.current) {
+          setError(`Failed to refresh ingestion status: ${String(err)}`);
+        }
+      }
+    },
+    [clearPollTimer, fetchDocuments, trackIngestionJob],
+  );
+
   useEffect(() => {
+    mountedRef.current = true;
     fetchDocuments();
+    return () => {
+      mountedRef.current = false;
+      Object.keys(pollTimersRef.current).forEach((key) => {
+        const documentId = Number(key);
+        clearPollTimer(documentId);
+      });
+    };
   }, [fetchDocuments]);
 
   const handleIngest = async (id: number) => {
-    await apiFetch(`/api/documents/${id}/ingest/`, { method: "POST" });
-    await fetchDocuments();
+    setError(null);
+    setIngestingByDocumentId((prev) => ({ ...prev, [id]: true }));
+    clearPollTimer(id);
+
+    try {
+      const job = await apiFetch<IngestionJob>(`/api/documents/${id}/ingest/`, { method: "POST" });
+      if (!mountedRef.current) return;
+
+      trackIngestionJob(job);
+
+      if (isInProgressStatus(job.status)) {
+        void pollIngestionJob(id, job.job_id);
+      } else if (job.status === "succeeded") {
+        await fetchDocuments();
+      }
+    } catch (err) {
+      if (mountedRef.current) {
+        setError(String(err));
+      }
+    } finally {
+      if (mountedRef.current) {
+        setIngestingByDocumentId((prev) => ({ ...prev, [id]: false }));
+      }
+    }
   };
 
   const handleUpload = async () => {
@@ -76,6 +171,12 @@ export default function DocumentsAdminPage() {
       setUploading(false);
     }
   };
+
+  const activeIngestionCount = useMemo(
+    () =>
+      Object.values(ingestionJobsByDocumentId).filter((job) => isInProgressStatus(job.status)).length,
+    [ingestionJobsByDocumentId],
+  );
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-8">
@@ -115,10 +216,21 @@ export default function DocumentsAdminPage() {
         </div>
       </div>
 
+      {activeIngestionCount > 0 && (
+        <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
+          {activeIngestionCount} document{activeIngestionCount > 1 ? "s" : ""} currently ingesting. You can stay on this page while we keep updating progress.
+        </div>
+      )}
+
       {loading && <p className="text-gray-500">Loading documents...</p>}
       {error && <p className="text-red-600">Error: {error}</p>}
       {!loading && !error && (
-        <DocumentTable documents={documents} onIngest={handleIngest} />
+        <DocumentTable
+          documents={documents}
+          onIngest={handleIngest}
+          ingestingByDocumentId={ingestingByDocumentId}
+          ingestionJobsByDocumentId={ingestionJobsByDocumentId}
+        />
       )}
     </div>
   );
